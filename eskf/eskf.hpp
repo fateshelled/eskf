@@ -83,6 +83,18 @@ public:
     {
         this->initializeParameters();
         this->initializeWorkingMatrices();
+        this->setInitialPose(Eigen::Isometry3d::Identity());
+
+        // デフォルト初期共分散 (標準偏差の二乗として設定)
+        this->error_covariance_ = ErrorCovariance::Identity() * INITIAL_COV_SMALL_VALUE;
+        const double pos_var = INITIAL_POS_UNCERT_STD * INITIAL_POS_UNCERT_STD;
+        const double ori_var = INITIAL_ORI_UNCERT_STD * INITIAL_ORI_UNCERT_STD;
+
+        this->error_covariance_.template block<3, 3>(0, 0) = Eigen::Matrix3d::Identity() * pos_var;
+        this->error_covariance_.template block<3, 3>(6, 6) = Eigen::Matrix3d::Identity() * ori_var;
+        // 共分散行列の健全性チェック
+        this->checkCovarianceHealth();
+
         this->reset();
     }
 
@@ -137,20 +149,9 @@ public:
             z_meas.template head<3>() = odom.translation();
             z_meas.template tail<3>() = this->quaternionToAxisAngle(Eigen::Quaterniond(odom.rotation()));
 
-            // 観測予測値
-            ObservationVector h_pred;
-            h_pred.template head<3>() = this->nominal_state_.position;
-            // 姿勢の観測予測値は、誤差状態モデルにおいて名目状態からの偏差が観測されるためゼロとなる
-            h_pred.template tail<3>() = Eigen::Vector3d::Zero();
-
             // 残差計算（姿勢は特別処理）
             ObservationVector innovation;
-            innovation.template head<3>() = z_meas.template head<3>() - h_pred.template head<3>();
-
-            // 姿勢残差: manifold上での計算 (z_quat = q_n * delta_q_z_inv, so innovation_quat = q_n.inverse * z_quat = delta_q_z_inv)
-            const Eigen::Quaterniond z_quat = this->axisAngleToQuaternion(z_meas.template tail<3>());
-            const Eigen::Quaterniond innovation_quat = this->nominal_state_.quaternion.inverse() * z_quat;
-            innovation.template tail<3>() = this->quaternionToAxisAngle(innovation_quat);
+            this->computeInnovation(z_meas, innovation);
 
             // 観測ヤコビアン
             this->computeObservationJacobian(this->H_temp_);
@@ -253,11 +254,11 @@ private:
     // パラメータ
     struct Parameters
     {
-        // プロセスノイズ（各ノイズの標準偏差）
-        double position_noise = 0.01;     // 速度ランダムウォークノイズ (velocity random walk std dev) [m/s]
-        double velocity_noise = 0.1;      // 速度直接ノイズ (velocity direct noise std dev) [m/s]
-        double orientation_noise = 0.005; // 角速度ランダムウォークノイズ (angular velocity random walk std dev) [rad/s]
-        double angular_vel_noise = 0.01;  // 角速度直接ノイズ (angular velocity direct noise std dev) [rad/s]
+        // プロセスノイズ（連続時間でのPSD - Power Spectral Density）
+        double position_noise = 0.01;     // 速度ランダムウォークPSD [m²/s³]
+        double velocity_noise = 0.1;      // 速度ホワイトノイズPSD [m²/s³]
+        double orientation_noise = 0.005; // 角速度ランダムウォークPSD [rad²/s³]
+        double angular_vel_noise = 0.01;  // 角速度ホワイトノイズPSD [rad²/s³]
 
         // 観測ノイズ（固定値）
         double pos_noise = 0.02; // 位置観測ノイズ [m]
@@ -393,9 +394,30 @@ private:
         // ここでの δθ は回転ベクトルの誤差
         const Eigen::Matrix3d omega_skew = this->skewSymmetric(this->nominal_state_.angular_velocity);
         F.template block<3, 3>(6, 6) = Eigen::Matrix3d::Identity() - omega_skew * dt;
-        F.template block<3, 3>(6, 9) = -Eigen::Matrix3d::Identity() * dt;
+        F.template block<3, 3>(6, 9) = Eigen::Matrix3d::Identity() * dt;
 
         // δω' = δω (定数モデル)
+    }
+
+    /**
+     * @brief 観測残差の計算 - 修正版
+     * @param z_meas 観測ベクトル [位置3次元, 姿勢軸角3次元]
+     * @param innovation 出力する残差ベクトル
+     */
+    void computeInnovation(const ObservationVector &z_meas, ObservationVector &innovation) const
+    {
+        // 位置残差は単純な差分
+        innovation.template head<3>() = z_meas.template head<3>() - this->nominal_state_.position;
+
+        // 姿勢残差：軸角空間での計算
+        // 観測された姿勢（軸角）をクォータニオンに変換
+        const Eigen::Quaterniond z_quat = this->axisAngleToQuaternion(z_meas.template tail<3>());
+
+        // 名目状態の姿勢からの誤差クォータニオン
+        const Eigen::Quaterniond error_quat = this->nominal_state_.quaternion.inverse() * z_quat;
+
+        // 軸角形式の姿勢残差
+        innovation.template tail<3>() = this->quaternionToAxisAngle(error_quat);
     }
 
     /**
@@ -426,12 +448,12 @@ private:
         const double pos_var = this->params_.position_noise * this->params_.position_noise;
         const double vel_var = this->params_.velocity_noise * this->params_.velocity_noise;
         const double ori_var = this->params_.orientation_noise * this->params_.orientation_noise;
-        const double ang_vel_var = this->params_.angular_vel_noise * this->params_.angular_vel_noise;
+        const double ang_var = this->params_.angular_vel_noise * this->params_.angular_vel_noise;
 
         Q.template block<3, 3>(0, 0) = Eigen::Matrix3d::Identity() * pos_var;
         Q.template block<3, 3>(3, 3) = Eigen::Matrix3d::Identity() * vel_var;
         Q.template block<3, 3>(6, 6) = Eigen::Matrix3d::Identity() * ori_var;
-        Q.template block<3, 3>(9, 9) = Eigen::Matrix3d::Identity() * ang_vel_var;
+        Q.template block<3, 3>(9, 9) = Eigen::Matrix3d::Identity() * ang_var;
     }
 
     // ===================== 観測更新 =====================
@@ -450,6 +472,7 @@ private:
         // 姿勢観測: innovation_theta = axisAngle(q_n.inverse * odom_quat)
         // odom_quat = q_n * Exp(δθ) * Exp(error_on_measurement)
         // innovation_theta ≈ δθ (小角度近似)
+        // より正確には右ヤコビアンを使うべきだが、小角度では近似的にI
         H.template block<3, 3>(3, 6) = Eigen::Matrix3d::Identity(); // d(innovation_theta)/d(δθ)
     }
 
@@ -603,7 +626,7 @@ private:
         // q と -q は同じ回転を表すが、AngleAxisdは[0,π]の角度を返すため
         if (q_normalized.w() < 0)
         {
-            q_normalized.coeffs() *= -1;
+            q_normalized.coeffs() *= -1.0;
         }
 
         // Eigen::AngleAxisdによる変換（内部で数値安定性が考慮されている）
@@ -756,24 +779,6 @@ public:
     }
 
     /**
-     * @brief 現在のプロセスノイズ共分散行列取得
-     */
-    ProcessNoise getProcessNoiseMatrix() const
-    {
-        ProcessNoise Q;
-        this->computeProcessNoiseCovariance(Q);
-        return Q;
-    }
-
-    /**
-     * @brief 現在の観測ノイズ共分散行列取得
-     */
-    ObservationCovariance getMeasurementNoiseMatrix() const
-    {
-        return this->getDefaultMeasurementCovariance();
-    }
-
-    /**
      * @brief 初期共分散行列の直接設定
      * @param initial_covariance 初期誤差共分散行列 (12x12)
      */
@@ -807,9 +812,7 @@ public:
     /**
      * @brief 初期姿勢設定
      */
-    void setInitialPose(const Eigen::Isometry3d &initial_pose,
-                        const ObservationCovariance &initial_covariance = ObservationCovariance::Zero(),
-                        const double initial_timestamp = 0.0)
+    void setInitialPose(const Eigen::Isometry3d &initial_pose, const double initial_timestamp = 0.0)
     {
 
         // 初期姿勢の設定（四元数の正規化を保証）
@@ -821,29 +824,6 @@ public:
         this->nominal_state_.angular_velocity = Eigen::Vector3d::Zero();
 
         this->last_timestamp_ = initial_timestamp;
-
-        // 初期共分散の設定
-        if (initial_covariance.isZero(EPSILON_TIME))
-        {
-            // デフォルト初期共分散 (標準偏差の二乗として設定)
-            this->error_covariance_ = ErrorCovariance::Identity() * INITIAL_COV_SMALL_VALUE;
-            const double pos_var = INITIAL_POS_UNCERT_STD * INITIAL_POS_UNCERT_STD;
-            const double ori_var = INITIAL_ORI_UNCERT_STD * INITIAL_ORI_UNCERT_STD;
-
-            this->error_covariance_.template block<3, 3>(0, 0) = Eigen::Matrix3d::Identity() * pos_var;
-            this->error_covariance_.template block<3, 3>(6, 6) = Eigen::Matrix3d::Identity() * ori_var;
-        }
-        else
-        {
-            this->error_covariance_.template block<3, 3>(0, 0) = initial_covariance.template block<3, 3>(0, 0);
-            this->error_covariance_.template block<3, 3>(6, 6) = initial_covariance.template block<3, 3>(3, 3);
-            // 速度と角速度の初期共分散はデフォルト小値を使用
-            this->error_covariance_.template block<3, 3>(3, 3) = Eigen::Matrix3d::Identity() * INITIAL_COV_SMALL_VALUE;
-            this->error_covariance_.template block<3, 3>(9, 9) = Eigen::Matrix3d::Identity() * INITIAL_COV_SMALL_VALUE;
-        }
-
-        // 共分散行列の健全性チェック
-        this->checkCovarianceHealth();
     }
 
     /**
