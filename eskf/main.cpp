@@ -807,7 +807,6 @@ void runFilteringTest()
         timestamps.push_back(i * 0.1);
     }
 
-
     // ESKFのインスタンスを作成
     ErrorStateKF eskf;
     // 初期状態
@@ -819,8 +818,16 @@ void runFilteringTest()
     initial_pose.linear() = initial_orientation.toRotationMatrix();
 
     eskf.setInitialPose(initial_pose);
-    eskf.setMeasurementNoise(0.1, 0.1);
-    eskf.setProcessNoise(0.1, 0.1, 0.1, 0.1);
+    eskf.setMeasurementNoise(
+        1.0, // position_noise
+        0.5  // orientation_noise
+    );
+    eskf.setProcessNoise(
+        0.2, // position_noise
+        1.5, // velocity_noise
+        0.2, // orientation_noise
+        5.0  // angular_vel_noize
+    );
 
     // カルマンフィルタでフィルタリング
     Eigen::Vector3d filtered_position;
