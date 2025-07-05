@@ -22,8 +22,8 @@ private:
     static constexpr int ERROR_STATE_DIM = 12; // 誤差状態次元数
     static constexpr int OBSERVATION_DIM = 6;  // 観測次元数
 
-    using ErrorStateVector = Eigen::Vector<double, ERROR_STATE_DIM>;
-    using ObservationVector = Eigen::Vector<double, OBSERVATION_DIM>;
+    using ErrorStateVector = Eigen::Vector<double, ERROR_STATE_DIM>;  // 位置3, 速度3, 姿勢3, 角速度3
+    using ObservationVector = Eigen::Vector<double, OBSERVATION_DIM>; // 位置3, 姿勢3
     using ErrorCovariance = Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>;
     using StateTransition = Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>;
     using ProcessNoise = Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>;
@@ -154,7 +154,7 @@ public:
             this->computeInnovation(z_meas, innovation);
 
             // 観測ヤコビアン
-            this->computeObservationJacobian(this->H_temp_);
+            this->computeObservationJacobian(this->H_temp_, innovation);
 
             // カルマン更新
             this->performKalmanUpdate(this->H_temp_, innovation, measurement_cov);
@@ -462,7 +462,7 @@ private:
      * @brief 観測ヤコビアン H の計算（インプレース版）
      * @param H 出力先の観測ヤコビアン行列
      */
-    void computeObservationJacobian(ObservationJacobian &H) const
+    void computeObservationJacobian(ObservationJacobian &H, ObservationVector &innovation) const
     {
         H.setZero();
 
@@ -472,8 +472,28 @@ private:
         // 姿勢観測: innovation_theta = axisAngle(q_n.inverse * odom_quat)
         // odom_quat = q_n * Exp(δθ) * Exp(error_on_measurement)
         // innovation_theta ≈ δθ (小角度近似)
-        // より正確には右ヤコビアンを使うべきだが、小角度では近似的にI
-        H.template block<3, 3>(3, 6) = Eigen::Matrix3d::Identity(); // d(innovation_theta)/d(δθ)
+        const Eigen::Vector3d phi = innovation.template tail<3>();
+        const Eigen::Matrix3d right_jacobian = this->rightJacobianSO3(phi);
+        H.template block<3, 3>(3, 6) = right_jacobian; // d(innovation_theta)/d(δθ)
+    }
+
+    /**
+     * @brief SO(3)の右ヤコビアン
+     * @param phi 軸角ベクトル
+     * @return 右ヤコビアン行列
+     */
+    Eigen::Matrix3d rightJacobianSO3(const Eigen::Vector3d &phi) const
+    {
+        const double angle = phi.norm();
+        const Eigen::Matrix3d I = Eigen::Matrix3d::Identity();
+        if (angle < EPSILON_ANGLE)
+        {
+            return I;
+        }
+        const Eigen::Matrix3d phi_hat = this->skewSymmetric(phi / angle);
+        const double s = std::sin(angle);
+        const double c = std::cos(angle);
+        return I - (1.0 - c) / (angle * angle) * phi_hat + (angle - s) / (angle * angle * angle) * (phi_hat * phi_hat);
     }
 
     /**

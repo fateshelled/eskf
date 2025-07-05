@@ -741,6 +741,7 @@ void runFilteringTest()
     // 真の軌道（シミュレーション）
     std::vector<Eigen::Vector3d> true_positions;
     std::vector<Eigen::Quaterniond> true_orientations;
+    std::vector<double> timestamps;
 
     // 8の字を描く軌道を生成
     const int num_steps = 100;
@@ -774,12 +775,14 @@ void runFilteringTest()
 
         // 真の軌道データをTrajectoryDataに追加
         trajectory_data.ground_truth.emplace_back(i * 1.0, true_pos, true_ori, false);
+
+        // 10Hz
+        timestamps.push_back(static_cast<double>(i) * 0.1);
     }
 
     // ノイズを加えた観測データを生成
     std::vector<Eigen::Vector3d> noisy_positions;
     std::vector<Eigen::Quaterniond> noisy_orientations;
-    std::vector<double> timestamps;
 
     const double pos_noise_level = 0.2;  // 位置ノイズレベル
     const double ori_noise_level = 0.05; // 向きノイズレベル
@@ -802,9 +805,6 @@ void runFilteringTest()
 
         // トラジェクトリデータにノイズ付き観測を追加
         trajectory_data.raw_trajectory.emplace_back(i * 1.0, noisy_pos, noisy_ori, false);
-
-        // 10Hz
-        timestamps.push_back(i * 0.1);
     }
 
     // ESKFのインスタンスを作成
