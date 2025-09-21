@@ -2,7 +2,7 @@
 Error State Kalman filter
 
 ```bash
-sudo apt install freeglut3-dev libglu1-mesa-dev
+sudo apt install freeglut3-dev libglu1-mesa-dev libeigen3-dev
 
 git clone https://github.com/fateshelled/eskf
 

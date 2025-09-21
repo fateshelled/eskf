@@ -89,24 +89,25 @@ void generateSimulatedData(TrajectoryData &trajectory_data)
         trajectory_data.raw_trajectory.emplace_back(timestamps[i], noisy_pos, noisy_ori, false);
     }
 
-    ErrorStateKF eskf;
-    Eigen::Isometry3d initial_pose = Eigen::Isometry3d::Identity();
-    initial_pose.translation() = Eigen::Vector3d::Zero();
-    initial_pose.linear() = Eigen::Quaterniond::Identity().toRotationMatrix();
+    ESKF eskf;
+    Eigen::Vector3d initial_translation = Eigen::Vector3d::Zero();
+    Eigen::Quaterniond initial_orientation = Eigen::Quaterniond::Identity();
 
-    eskf.setInitialPose(initial_pose);
-    eskf.setMeasurementNoise(1.0, 0.5);
-    eskf.setProcessNoise(0.2, 1.5, 0.2, 5.0);
+    eskf.setState(initial_translation, Eigen::Vector3d::Zero(), initial_orientation, Eigen::Vector3d::Zero());
+    eskf.setMeasurementNoise(0.1, 0.1);
+    eskf.setProcessNoiseDensities(5.0, 5.0);
 
     for (int i = 0; i < num_steps; ++i)
     {
-        Eigen::Isometry3d noisy_pose = Eigen::Isometry3d::Identity();
-        noisy_pose.translation() = noisy_positions[i];
-        noisy_pose.linear() = noisy_orientations[i].toRotationMatrix();
+        if (i == 0) {
+            eskf.update(noisy_positions[i], noisy_orientations[i]);
+            continue;
+        }
+        const auto dt = timestamps[i] - timestamps[i - 1];
+        eskf.predict(dt);
+        eskf.update(noisy_positions[i], noisy_orientations[i]);
 
-        eskf.update(noisy_pose, timestamps[i]);
-
-        const Eigen::Isometry3d pose = eskf.getCurrentPose();
+        const Eigen::Isometry3d pose = eskf.getPose();
         trajectory_data.filtered_trajectory.emplace_back(timestamps[i], pose.translation(),
                                                          Eigen::Quaterniond(pose.linear()), true);
     }
