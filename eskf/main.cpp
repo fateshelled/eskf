@@ -112,7 +112,6 @@ void generateSimulatedData(TrajectoryData &trajectory_data)
 int main(int argc, char **argv)
 {
     glutInit(&argc, argv);
-    std::srand(static_cast<unsigned>(std::time(nullptr)));
 
     TrajectoryData trajectory_data;
     bool loaded_from_files = false;
@@ -195,4 +194,3 @@ int main(int argc, char **argv)
 
     return 0;
 }
-
