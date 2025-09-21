@@ -37,7 +37,7 @@ public:
     std::vector<PoseData> raw_trajectory;
     std::vector<PoseData> filtered_trajectory;
     std::vector<PoseData> ground_truth;
-    std::mutex data_mutex;
+    mutable std::mutex data_mutex;
 
     void clear();
 
@@ -119,6 +119,7 @@ inline void TrajectoryData::clear()
 
 inline bool TrajectoryData::saveTumFiles(const std::string &prefix) const
 {
+    std::lock_guard<std::mutex> lock(data_mutex);
     const bool raw_ok = saveTumFile(prefix + "_raw.tum", raw_trajectory);
     const bool filtered_ok = saveTumFile(prefix + "_filtered.tum", filtered_trajectory);
     const bool gt_ok = saveTumFile(prefix + "_ground_truth.tum", ground_truth);
@@ -129,6 +130,7 @@ inline bool TrajectoryData::loadTumFiles(const std::string &raw_path,
                                          const std::string &filtered_path,
                                          const std::string &ground_truth_path)
 {
+    std::lock_guard<std::mutex> lock(data_mutex);
     bool ok = true;
     ok &= loadTumFile(raw_path, raw_trajectory, false);
     ok &= loadTumFile(filtered_path, filtered_trajectory, true);
@@ -729,8 +731,8 @@ inline void TrajectoryVisualizer::advanceFrame()
         return;
     }
 
-    selected_frame_index_ = std::min(static_cast<int>(trajectory_data_->raw_trajectory.size()) - 1,
-                                     selected_frame_index_ + animation_speed_);
+    selected_frame_index_ = (selected_frame_index_ + animation_speed_)
+                            % static_cast<int>(trajectory_data_->raw_trajectory.size());
     glutPostRedisplay();
 }
 
