@@ -1,5 +1,6 @@
 #include <GL/glut.h>
 
+#include <random>
 #include <cmath>
 #include <cstdlib>
 #include <ctime>
@@ -25,7 +26,14 @@ void generateSimulatedData(TrajectoryData &trajectory_data)
     trajectory_data.clear();
 
     const int seed = 12345;
-    std::srand(seed);
+// At the top of generateSimulatedData
+    std::mt19937 gen(seed);
+
+    const double pos_noise_level = 0.2;
+    const double ori_noise_level = 0.05;
+    std::uniform_real_distribution<> distrib_pos(-pos_noise_level, pos_noise_level);
+    std::uniform_real_distribution<> distrib_ori(0.0, ori_noise_level);
+    std::uniform_real_distribution<> distrib_axis(-1.0, 1.0);
 
     std::vector<Eigen::Vector3d> true_positions;
     std::vector<Eigen::Quaterniond> true_orientations;
@@ -66,16 +74,13 @@ void generateSimulatedData(TrajectoryData &trajectory_data)
     noisy_positions.reserve(num_steps);
     noisy_orientations.reserve(num_steps);
 
-    const double pos_noise_level = 0.2;
-    const double ori_noise_level = 0.05;
-
     for (int i = 0; i < num_steps; ++i)
     {
-        const Eigen::Vector3d noise_pos = Eigen::Vector3d::Random() * pos_noise_level;
+        const Eigen::Vector3d noise_pos(distrib_pos(gen), distrib_pos(gen), distrib_pos(gen));
         const Eigen::Vector3d noisy_pos = true_positions[i] + noise_pos;
 
-        const Eigen::Vector3d noise_axis = Eigen::Vector3d::Random().normalized();
-        const double noise_angle = static_cast<double>(std::rand()) / RAND_MAX * ori_noise_level;
+        const Eigen::Vector3d noise_axis = Eigen::Vector3d(distrib_axis(gen), distrib_axis(gen), distrib_axis(gen)).normalized();
+        const double noise_angle = distrib_ori(gen);
         const Eigen::Quaterniond noise_quat(Eigen::AngleAxisd(noise_angle, noise_axis));
         const Eigen::Quaterniond noisy_ori = true_orientations[i] * noise_quat;
 
