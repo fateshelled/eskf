@@ -26,7 +26,6 @@ void generateSimulatedData(TrajectoryData &trajectory_data)
     trajectory_data.clear();
 
     const int seed = 12345;
-// At the top of generateSimulatedData
     std::mt19937 gen(seed);
 
     const double pos_noise_level = 0.2;
