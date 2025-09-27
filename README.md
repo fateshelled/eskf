@@ -14,3 +14,7 @@ g++ -std=c++17 -O2 -Wall -Wextra \
 
 ./a.out
 ```
+
+## Square-root ESKF
+
+`SquareRootESKF` は既存の誤差状態カルマンフィルタをベースに、共分散のコレスキー因子を直接管理する平方根カルマンフィルタ実装です。実装は `eskf/square_root_eskf.hpp` にまとまっています。
