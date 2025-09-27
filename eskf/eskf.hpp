@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 
-#include <Eigen/Cholesky>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 
@@ -162,7 +161,7 @@ public:
         this->P_ = 0.5 * (this->P_ + this->P_.transpose());
     }
 
-private:
+protected:
     // 3次元ベクトルから歪対称行列（skew-symmetric matrix）を生成します。
     static Eigen::Matrix3d skew(const Eigen::Vector3d &v)
     {
@@ -221,3 +220,4 @@ private:
     Eigen::Matrix<double, 6, 6> Q_;         // プロセスノイズの共分散行列
     Eigen::Matrix<double, 6, 6> R_;         // 観測ノイズの共分散行列
 };
+
