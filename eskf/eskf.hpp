@@ -177,23 +177,20 @@ public:
         H.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity();
         H.block<3, 3>(3, 6) = Eigen::Matrix3d::Identity();
 
-        Eigen::Matrix<double, 12, 6> W = this->L_ * H.transpose();
+        Eigen::Matrix<double, 12, 6> LHt = this->L_ * H.transpose();
         Eigen::Matrix<double, 18, 6> stacked_measurement;
         stacked_measurement.topRows<6>() = this->SR_;
-        stacked_measurement.bottomRows<12>() = W;
+        stacked_measurement.bottomRows<12>() = LHt;
 
         Eigen::HouseholderQR<Eigen::Matrix<double, 18, 6>> qr(stacked_measurement);
         Eigen::Matrix<double, 6, 6> T = qr.matrixQR().topRows<6>();
         T.template triangularView<Eigen::StrictlyLower>().setZero();
 
-        Eigen::Matrix<double, 6, 12> Y = T.triangularView<Eigen::Upper>().solve(W.transpose());
-        [[maybe_unused]] const Eigen::Matrix<double, 12, 6> K =
-            T.transpose().triangularView<Eigen::Upper>().solve(Y).transpose();
+        Eigen::Matrix<double, 6, 1> y = T.transpose().triangularView<Eigen::Lower>().solve(residual);
+        Eigen::Matrix<double, 6, 1> z = T.triangularView<Eigen::Upper>().solve(y);
 
-        Eigen::Matrix<double, 6, 12> Wt_solve =
-            T.transpose().triangularView<Eigen::Upper>().solve(W.transpose());
-        Eigen::Matrix<double, 6, 1> y = T.triangularView<Eigen::Upper>().solve(residual);
-        Eigen::Matrix<double, 12, 1> delta_x = Wt_solve.transpose() * y;
+        // 4. 誤差状態の補正量を計算
+        Eigen::Matrix<double, 12, 1> delta_x = this->L_.transpose() * (LHt * z);
 
         // 5. 公称状態の補正 (Inject error state into nominal state)
         this->position_ += delta_x.segment<3>(0);
@@ -202,6 +199,7 @@ public:
         this->orientation_ = (this->orientation_ * expSO3(delta_theta)).normalized();
         this->angular_velocity_body_ += delta_x.segment<3>(9);
 
+        // 6. 共分散行列の更新
         Eigen::Matrix<double, 18, 12> stacked_covariance = Eigen::Matrix<double, 18, 12>::Zero();
         stacked_covariance.bottomRows<12>() = this->L_;
         stacked_covariance = qr.householderQ().adjoint() * stacked_covariance;
