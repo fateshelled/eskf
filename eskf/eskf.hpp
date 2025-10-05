@@ -183,8 +183,7 @@ public:
         stacked_measurement.bottomRows<12>() = W;
 
         Eigen::HouseholderQR<Eigen::Matrix<double, 18, 6>> qr(stacked_measurement);
-        Eigen::Matrix<double, 18, 6> transformed_measurement = qr.householderQ().adjoint() * stacked_measurement;
-        Eigen::Matrix<double, 6, 6> T = transformed_measurement.topRows<6>();
+        Eigen::Matrix<double, 6, 6> T = qr.matrixQR().topRows<6>();
         T.template triangularView<Eigen::StrictlyLower>().setZero();
 
         Eigen::Matrix<double, 6, 12> Y = T.triangularView<Eigen::Upper>().solve(W.transpose());
