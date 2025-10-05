@@ -177,41 +177,24 @@ public:
         H.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity();
         H.block<3, 3>(3, 6) = Eigen::Matrix3d::Identity();
 
-        Eigen::Matrix<double, 12, 6> LHt = this->L_ * H.transpose();
-        Eigen::Matrix<double, 6, 6> S = LHt.transpose() * LHt + this->R_;
+        Eigen::Matrix<double, 12, 6> W = this->L_ * H.transpose();
+        Eigen::Matrix<double, 18, 6> stacked_measurement;
+        stacked_measurement.topRows<6>() = this->SR_;
+        stacked_measurement.bottomRows<12>() = W;
 
-        Eigen::Matrix<double, 6, 6> regularized_S = S;
-        Eigen::LLT<Eigen::Matrix<double, 6, 6>> llt_S;
-        bool S_decomposed = false;
-        double jitter_S = 0.0;
-        const Eigen::Matrix<double, 6, 6> I6 = Eigen::Matrix<double, 6, 6>::Identity();
-        for (int attempt = 0; attempt < 6; ++attempt)
-        {
-            if (attempt > 0)
-            {
-                jitter_S = (attempt == 1 ? 1e-9 : jitter_S * 10.0);
-                regularized_S = S + jitter_S * I6;
-            }
-            llt_S.compute(regularized_S);
-            if (llt_S.info() == Eigen::Success)
-            {
-                S = regularized_S;
-                S_decomposed = true;
-                break;
-            }
-        }
-        if (!S_decomposed)
-        {
-            this->L_.setIdentity();
-            return;
-        }
+        Eigen::HouseholderQR<Eigen::Matrix<double, 18, 6>> qr(stacked_measurement);
+        Eigen::Matrix<double, 18, 6> transformed_measurement = qr.householderQ().adjoint() * stacked_measurement;
+        Eigen::Matrix<double, 6, 6> T = transformed_measurement.topRows<6>();
+        T.template triangularView<Eigen::StrictlyLower>().setZero();
 
-        Eigen::Matrix<double, 12, 6> PHt = this->L_.transpose() * LHt;
-        Eigen::Matrix<double, 6, 12> temp = llt_S.solve(PHt.transpose());
-        Eigen::Matrix<double, 12, 6> K = temp.transpose();
+        Eigen::Matrix<double, 6, 12> Y = T.triangularView<Eigen::Upper>().solve(W.transpose());
+        [[maybe_unused]] const Eigen::Matrix<double, 12, 6> K =
+            T.transpose().triangularView<Eigen::Upper>().solve(Y).transpose();
 
-        // 4. 誤差状態の補正量を計算
-        Eigen::Matrix<double, 12, 1> delta_x = K * residual;
+        Eigen::Matrix<double, 6, 12> Wt_solve =
+            T.transpose().triangularView<Eigen::Upper>().solve(W.transpose());
+        Eigen::Matrix<double, 6, 1> y = T.triangularView<Eigen::Upper>().solve(residual);
+        Eigen::Matrix<double, 12, 1> delta_x = Wt_solve.transpose() * y;
 
         // 5. 公称状態の補正 (Inject error state into nominal state)
         this->position_ += delta_x.segment<3>(0);
@@ -220,38 +203,13 @@ public:
         this->orientation_ = (this->orientation_ * expSO3(delta_theta)).normalized();
         this->angular_velocity_body_ += delta_x.segment<3>(9);
 
-        // 6. 共分散行列の更新 (Joseph form)
-        const Eigen::Matrix<double, 12, 12> I12 = Eigen::Matrix<double, 12, 12>::Identity();
-        const Eigen::Matrix<double, 12, 12> I_minus_KH = I12 - K * H;
-        Eigen::Matrix<double, 12, 12> transformed = this->L_ * I_minus_KH.transpose();
-        Eigen::Matrix<double, 12, 12> P_updated = transformed.transpose() * transformed + K * this->R_ * K.transpose();
-        P_updated = 0.5 * (P_updated + P_updated.transpose());
+        Eigen::Matrix<double, 18, 12> stacked_covariance = Eigen::Matrix<double, 18, 12>::Zero();
+        stacked_covariance.bottomRows<12>() = this->L_;
+        stacked_covariance = qr.householderQ().adjoint() * stacked_covariance;
 
-        Eigen::Matrix<double, 12, 12> regularized_P = P_updated;
-        Eigen::LLT<Eigen::Matrix<double, 12, 12>> llt_P;
-        bool P_decomposed = false;
-        double jitter_P = 0.0;
-        const Eigen::Matrix<double, 12, 12> I12_full = Eigen::Matrix<double, 12, 12>::Identity();
-        for (int attempt = 0; attempt < 6; ++attempt)
-        {
-            if (attempt > 0)
-            {
-                jitter_P = (attempt == 1 ? 1e-9 : jitter_P * 10.0);
-                regularized_P = P_updated + jitter_P * I12_full;
-            }
-            llt_P.compute(regularized_P);
-            if (llt_P.info() == Eigen::Success)
-            {
-                this->L_ = llt_P.matrixU();
-                P_decomposed = true;
-                break;
-            }
-        }
-
-        if (!P_decomposed)
-        {
-            this->L_.setIdentity();
-        }
+        Eigen::Matrix<double, 12, 12> newL = stacked_covariance.bottomRows<12>();
+        newL.template triangularView<Eigen::StrictlyLower>().setZero();
+        this->L_ = newL;
     }
 
 private:
