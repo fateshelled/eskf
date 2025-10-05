@@ -137,18 +137,15 @@ public:
             G.block<3, 3>(6, 3) = 0.5 * Eigen::Matrix3d::Identity() * dt * dt;
             G.block<3, 3>(9, 3) = Eigen::Matrix3d::Identity() * dt;
 
-            Eigen::Matrix<double, 12, 12> process = Eigen::Matrix<double, 12, 12>::Zero();
-            process.block<12, 6>(0, 0) = G * this->SQ_;
+            // The correct square-root propagation for P_pred = F*P*F' + G*Q*G'
+            // with P = L'*L is to compute QR of [L*F'; SQ*G'].
+            // The resulting R factor is the new L.
+            Eigen::Matrix<double, 18, 12> stacked;
+            stacked.topRows<12>() = this->L_ * F.transpose();
+            stacked.bottomRows<6>() = this->SQ_ * G.transpose();
 
-            Eigen::Matrix<double, 24, 12> stacked;
-            stacked.topRows<12>() = F * this->L_;
-            stacked.bottomRows<12>() = process;
-
-            Eigen::HouseholderQR<Eigen::Matrix<double, 24, 12>> qr(stacked);
-            const Eigen::Matrix<double, 24, 12> qr_matrix = qr.matrixQR();
-            const Eigen::Matrix<double, 12, 12> R = qr_matrix.topRows<12>().template triangularView<Eigen::Upper>();
-
-            this->L_ = R;
+            Eigen::HouseholderQR<Eigen::Matrix<double, 18, 12>> qr(stacked);
+            this->L_ = qr.matrixQR().topRows<12>().template triangularView<Eigen::Upper>();
         }
     }
 
