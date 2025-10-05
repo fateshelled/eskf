@@ -6,6 +6,7 @@
 #include <Eigen/Cholesky>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
+#include <Eigen/QR>
 
 // Error-State Kalman Filter (ESKF) の実装。
 // 12次元の状態ベクトル（位置、速度、向き、角速度）を推定します。
@@ -17,9 +18,11 @@ public:
           velocity_body_(Eigen::Vector3d::Zero()),
           orientation_(Eigen::Quaterniond::Identity()),
           angular_velocity_body_(Eigen::Vector3d::Zero()),
-          P_(Eigen::Matrix<double, 12, 12>::Identity()),
+          L_(Eigen::Matrix<double, 12, 12>::Identity()),
           Q_(Eigen::Matrix<double, 6, 6>::Identity()),
-          R_(Eigen::Matrix<double, 6, 6>::Identity())
+          R_(Eigen::Matrix<double, 6, 6>::Identity()),
+          SQ_(Eigen::Matrix<double, 6, 6>::Identity()),
+          SR_(Eigen::Matrix<double, 6, 6>::Identity())
     {
         // デフォルトのノイズパラメータを設定
         setProcessNoiseDensities(0.09, 1.2e-3);
@@ -41,7 +44,18 @@ public:
     }
 
     // 誤差状態の共分散行列を設定します。
-    void setCovariance(const Eigen::Matrix<double, 12, 12> &covariance) { this->P_ = covariance; }
+    void setCovariance(const Eigen::Matrix<double, 12, 12> &covariance)
+    {
+        Eigen::LLT<Eigen::Matrix<double, 12, 12>> llt(covariance);
+        if (llt.info() == Eigen::Success)
+        {
+            this->L_ = llt.matrixU();
+        }
+        else
+        {
+            this->L_.setIdentity();
+        }
+    }
 
     // プロセスノイズの密度を設定します。
     void setProcessNoiseDensities(double q_v, double q_omega)
@@ -49,6 +63,15 @@ public:
         this->Q_.setZero();
         this->Q_.block<3, 3>(0, 0) = q_v * Eigen::Matrix3d::Identity();
         this->Q_.block<3, 3>(3, 3) = q_omega * Eigen::Matrix3d::Identity();
+        Eigen::LLT<Eigen::Matrix<double, 6, 6>> llt(this->Q_);
+        if (llt.info() == Eigen::Success)
+        {
+            this->SQ_ = llt.matrixU();
+        }
+        else
+        {
+            this->SQ_.setZero();
+        }
     }
 
     // 観測ノイズの標準偏差を設定します。
@@ -57,6 +80,15 @@ public:
         this->R_.setZero();
         this->R_.block<3, 3>(0, 0) = (sigma_p * sigma_p) * Eigen::Matrix3d::Identity();
         this->R_.block<3, 3>(3, 3) = (sigma_theta * sigma_theta) * Eigen::Matrix3d::Identity();
+        Eigen::LLT<Eigen::Matrix<double, 6, 6>> llt(this->R_);
+        if (llt.info() == Eigen::Success)
+        {
+            this->SR_ = llt.matrixU();
+        }
+        else
+        {
+            this->SR_.setZero();
+        }
     }
 
     // 現在の姿勢（位置と向き）をEigen::Isometry3dとして取得します。
@@ -71,7 +103,7 @@ public:
     // 各状態量と共分散行列を取得するゲッター
     const Eigen::Vector3d &getVelocity() const { return this->velocity_body_; }
     const Eigen::Vector3d &getAngularVelocity() const { return this->angular_velocity_body_; }
-    const Eigen::Matrix<double, 12, 12> &getCovariance() const { return this->P_; }
+    Eigen::Matrix<double, 12, 12> getCovariance() const { return this->L_.transpose() * this->L_; }
 
     // 予測ステップ：次のタイムステップの状態を予測します。
     // @param dt 経過時間
@@ -105,10 +137,18 @@ public:
             G.block<3, 3>(6, 3) = 0.5 * Eigen::Matrix3d::Identity() * dt * dt;
             G.block<3, 3>(9, 3) = Eigen::Matrix3d::Identity() * dt;
 
-            const Eigen::Matrix<double, 12, 12> FP = F * this->P_;
-            this->P_ = FP * F.transpose() + G * this->Q_ * G.transpose();
-            // 対称性を維持するための処理
-            this->P_ = 0.5 * (P_ + this->P_.transpose());
+            Eigen::Matrix<double, 12, 12> process = Eigen::Matrix<double, 12, 12>::Zero();
+            process.block<12, 6>(0, 0) = G * this->SQ_;
+
+            Eigen::Matrix<double, 24, 12> stacked;
+            stacked.topRows<12>() = F * this->L_;
+            stacked.bottomRows<12>() = process;
+
+            Eigen::HouseholderQR<Eigen::Matrix<double, 24, 12>> qr(stacked);
+            const Eigen::Matrix<double, 24, 12> qr_matrix = qr.matrixQR();
+            const Eigen::Matrix<double, 12, 12> R = qr_matrix.topRows<12>().template triangularView<Eigen::Upper>();
+
+            this->L_ = R;
         }
     }
 
@@ -140,10 +180,19 @@ public:
         H.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity();
         H.block<3, 3>(3, 6) = Eigen::Matrix3d::Identity();
 
-        const Eigen::Matrix<double, 12, 6> PHt = this->P_ * H.transpose();
-        const Eigen::Matrix<double, 6, 6> S = H * PHt + this->R_;
-        const Eigen::Matrix<double, 6, 6> S_inv = S.ldlt().solve(Eigen::Matrix<double, 6, 6>::Identity());
-        const Eigen::Matrix<double, 12, 6> K = PHt * S_inv;
+        Eigen::Matrix<double, 18, 18> stacked = Eigen::Matrix<double, 18, 18>::Zero();
+        stacked.topLeftCorner<6, 6>() = this->SR_;
+        stacked.bottomLeftCorner<12, 6>() = H * this->L_;
+        stacked.bottomRightCorner<12, 12>() = this->L_;
+
+        Eigen::HouseholderQR<Eigen::Matrix<double, 18, 18>> qr(stacked);
+        const Eigen::Matrix<double, 18, 18> qr_matrix = qr.matrixQR();
+        const Eigen::Matrix<double, 18, 18> Rfull = qr_matrix.template triangularView<Eigen::Upper>();
+
+        const Eigen::Matrix<double, 6, 12> R12 = Rfull.topRightCorner<6, 12>();
+        const Eigen::Matrix<double, 12, 12> R22 = Rfull.bottomRightCorner<12, 12>();
+
+        Eigen::Matrix<double, 12, 6> K = R22.transpose().template triangularView<Eigen::Lower>().solve(R12.transpose());
 
         // 4. 誤差状態の補正量を計算
         Eigen::Matrix<double, 12, 1> delta_x = K * residual;
@@ -156,10 +205,7 @@ public:
         this->angular_velocity_body_ += delta_x.segment<3>(9);
 
         // 6. 共分散行列の更新 (Joseph form)
-        const Eigen::Matrix<double, 12, 12> IKH = Eigen::Matrix<double, 12, 12>::Identity() - K * H;
-        this->P_ = IKH * this->P_ * IKH.transpose() + K * this->R_ * K.transpose();
-        // 対称性を維持するための処理
-        this->P_ = 0.5 * (this->P_ + this->P_.transpose());
+        this->L_ = R22;
     }
 
 private:
@@ -217,7 +263,9 @@ private:
     Eigen::Vector3d velocity_body_;         // 速度 (機体座標系)
     Eigen::Quaterniond orientation_;        // 姿勢 (ワールド座標系から機体座標系への回転)
     Eigen::Vector3d angular_velocity_body_; // 角速度 (機体座標系)
-    Eigen::Matrix<double, 12, 12> P_;       // 誤差状態の共分散行列
+    Eigen::Matrix<double, 12, 12> L_;       // 誤差状態共分散の平方根（上三角）
     Eigen::Matrix<double, 6, 6> Q_;         // プロセスノイズの共分散行列
     Eigen::Matrix<double, 6, 6> R_;         // 観測ノイズの共分散行列
+    Eigen::Matrix<double, 6, 6> SQ_;        // プロセスノイズ共分散の平方根（上三角）
+    Eigen::Matrix<double, 6, 6> SR_;        // 観測ノイズ共分散の平方根（上三角）
 };
