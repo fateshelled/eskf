@@ -49,7 +49,7 @@ public:
         Eigen::LLT<Eigen::Matrix<double, 12, 12>> llt(covariance);
         if (llt.info() == Eigen::Success)
         {
-            this->L_ = llt.matrixU();
+            this->L_ = llt.matrixU(); // upper triangle
         }
         else
         {
@@ -66,7 +66,7 @@ public:
         Eigen::LLT<Eigen::Matrix<double, 6, 6>> llt(this->Q_);
         if (llt.info() == Eigen::Success)
         {
-            this->SQ_ = llt.matrixU();
+            this->SQ_ = llt.matrixU(); // upper triangle
         }
         else
         {
@@ -83,7 +83,7 @@ public:
         Eigen::LLT<Eigen::Matrix<double, 6, 6>> llt(this->R_);
         if (llt.info() == Eigen::Success)
         {
-            this->SR_ = llt.matrixU();
+            this->SR_ = llt.matrixU(); // upper triangle
         }
         else
         {
@@ -113,7 +113,11 @@ public:
 
         // 1. 公称状態の予測
         {
+            // 定速・定角速度モデル
+            // 速度と角速度はプロセスノイズによるランダムウォーク
+
             // 位置の更新
+            // R * v: world座標系速度
             const Eigen::Vector3d position_increment = R * this->velocity_body_ * dt;
             this->position_ += position_increment;
 
@@ -124,25 +128,55 @@ public:
 
         // 2. ノイズ共分散行列の更新
         {
-            Eigen::Matrix<double, 12, 12> F = Eigen::Matrix<double, 12, 12>::Identity();
             // 誤差状態遷移行列 F の構築
-            F.block<3, 3>(0, 3) = R * dt;
-            F.block<3, 3>(0, 6) = -R * skew(this->velocity_body_) * dt;
-            F.block<3, 3>(6, 9) = Eigen::Matrix3d::Identity() * dt;
+            Eigen::Matrix<double, 12, 12> F = Eigen::Matrix<double, 12, 12>::Identity();
+            {
+                //                    position    velocity       quaternion       angular_velocity
+                //         position |     I    |   R * dt  |  -R * skew(v) * dt |                  |
+                //         velocity |          |     I     |                    |                  |
+                //       quaternion |          |           |         I          |      I * dt      |
+                // angular_velocity |          |           |                    |        I         |
+                F.block<3, 3>(0, 3) = R * dt;
+                F.block<3, 3>(0, 6) = -R * skew(this->velocity_body_) * dt;
+                F.block<3, 3>(6, 9) = Eigen::Matrix3d::Identity() * dt;
+            }
 
-            Eigen::Matrix<double, 12, 6> G = Eigen::Matrix<double, 12, 6>::Zero();
             // ノイズ駆動行列 G の構築
-            G.block<3, 3>(0, 0) = 0.5 * R * dt * dt;
-            G.block<3, 3>(3, 0) = Eigen::Matrix3d::Identity() * dt;
-            G.block<3, 3>(6, 3) = 0.5 * Eigen::Matrix3d::Identity() * dt * dt;
-            G.block<3, 3>(9, 3) = Eigen::Matrix3d::Identity() * dt;
+            Eigen::Matrix<double, 12, 6> G = Eigen::Matrix<double, 12, 6>::Zero();
+            {
+                //                        position             velocity        quaternion   angular_velocity
+                //         position |   0.5 * R * dt^2  |                    |            |                  |
+                //         velocity |       I * dt      |        Zero        |            |                  |
+                //       quaternion |                   |   0.5 * I * dt^2   |    Zero    |                  |
+                // angular_velocity |                   |       I * dt       |            |        Zero      |
+                G.block<3, 3>(0, 0) = 0.5 * R * dt * dt;
+                G.block<3, 3>(3, 0) = Eigen::Matrix3d::Identity() * dt;
+                G.block<3, 3>(6, 3) = 0.5 * Eigen::Matrix3d::Identity() * dt * dt;
+                G.block<3, 3>(9, 3) = Eigen::Matrix3d::Identity() * dt;
+            }
 
-            // The correct square-root propagation for P_pred = F*P*F' + G*Q*G'
-            // with P = L'*L is to compute QR of [L*F'; SQ*G'].
-            // The resulting R factor is the new L.
+            // 誤差共分散行列の平方根因子 L をQR分解を使って求める
+            // P: 誤差共分散行列 ( = L.T * L )
+            // Q: プロセスノイズ共分散行列 ( = SQ.T * SQ )
+            // QR分解結果の R 行列が予測誤差共分散の平方根因子
+
+            // stacked = | L * F.T  |
+            //           | SQ * G.T |
+            // P_pred = F * P * F.T + G * Q * G.T
+            //        = F * (L.T * L) * F.T + G * (SQ.T * SQ) * G.T
+            //        = (F * L.T) * (L * F.T) + (G * SQ.T) * (SQ * G.T)
+            //        = | F * L.T;  G * SQ.T | * | L * F.T  |
+            //                                   | SQ * G.T |
+            //        = stacked.T * stacked
+
+            // P_pred = (Q * R).T * (Q * R)
+            //        = R.T * Q.T * Q * R
+            //        = R.T * R
+            // (Qは直交行列なので、Q.T * Q = I)
+
             Eigen::Matrix<double, 18, 12> stacked;
-            stacked.topRows<12>() = this->L_ * F.transpose();
-            stacked.bottomRows<6>() = this->SQ_ * G.transpose();
+            stacked.block<12, 12>(0, 0) = this->L_ * F.transpose();
+            stacked.block<6, 12>(12, 0) = this->SQ_ * G.transpose();
 
             const Eigen::HouseholderQR<Eigen::Matrix<double, 18, 12>> qr(stacked);
             this->L_ = qr.matrixQR().topRows<12>().template triangularView<Eigen::Upper>();
@@ -178,20 +212,46 @@ public:
         H.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity();
         H.block<3, 3>(3, 6) = Eigen::Matrix3d::Identity();
 
+        // 3. カルマンゲイン相当を計算
         const Eigen::Matrix<double, 12, 6> LHt = this->L_ * H.transpose();
-        Eigen::Matrix<double, 18, 6> stacked_measurement;
-        stacked_measurement.topRows<6>() = this->SR_;
-        stacked_measurement.bottomRows<12>() = LHt;
 
+        Eigen::Matrix<double, 18, 6> stacked_measurement;
+        {
+            // R: 観測ノイズ共分散 ( = SR.T * SR)
+            // stacked_measurement = |    SR   |
+            //                       | L * H.T |
+            // S  = stacked_measurement.T * stacked_measurement
+            //    = | SR.T ; H * L.T| * |    SR   |
+            //                          | L * H.T |
+            //    = SR.T * SR + H * L.T * L * H.T
+            //    = H * P(prev) + H.T + R
+
+            stacked_measurement.block<6, 6>(0, 0) = this->SR_;
+            stacked_measurement.block<12, 6>(6, 0) = LHt;
+        }
+
+        // stacked_measurementをQR分解することで、行列 S を求めずに、逆行列 S.inv を残差 residual にかけたベクトルを直接求める
         const Eigen::HouseholderQR<Eigen::Matrix<double, 18, 6>> qr(stacked_measurement);
+        // S の 平方根因子
         const auto T = qr.matrixQR().topRows<6>().template triangularView<Eigen::Upper>();
+        // solve: T.T * y = residual
         const Eigen::Matrix<double, 6, 1> y = T.transpose().solve(residual);
+        // solve: T * z = y
         const Eigen::Matrix<double, 6, 1> z = T.solve(y);
 
-        // 3. 誤差状態の補正量を計算
+        // T.T * y = residualにy = T * zを代入
+        // T.T * (T * z) = residual
+        // (T.T * T) * z = residual
+        // S * z = residual
+        // z = S.inv * residual
+
+        // 4. 誤差状態の補正量を計算
+        // K: カルマンゲイン
+        // delta_x = K * z
+        //         = P * H.T * S.inv * z
         const Eigen::Matrix<double, 12, 1> delta_x = this->L_.transpose() * (LHt * z);
 
-        // 4. 公称状態の補正
+        // 5. 公称状態の補正
         {
             this->position_ += delta_x.segment<3>(0);
             this->velocity_body_ += delta_x.segment<3>(3);
@@ -200,12 +260,23 @@ public:
             this->angular_velocity_body_ += delta_x.segment<3>(9);
         }
 
-        // 5. 共分散行列の更新
+        // 6. 共分散行列の更新
+        // stacked_covariance = | 0 |
+        //                      | L |
         Eigen::Matrix<double, 18, 12> stacked_covariance = Eigen::Matrix<double, 18, 12>::Zero();
         stacked_covariance.bottomRows<12>() = this->L_;
-        stacked_covariance = qr.householderQ().adjoint() * stacked_covariance;
 
+        // 左から Q.T をかける
+        stacked_covariance = qr.householderQ().adjoint() * stacked_covariance;
+        // 下ブロックの行列が更新後の共分散平方根因子
         this->L_ = stacked_covariance.bottomRows<12>().template triangularView<Eigen::Upper>();
+
+        // この実装では
+        // stacked = |    SR   ; 0 | に対して、左右に分割してそれぞれ処理を行っている。
+        //           | L * H.T ; L |
+        // 上記のstackedをQR分解し、得られたR行列が R = | R11; R12 | となり、更新後の共分散平方根因子はR22となる。
+        //                                              |   0; R22 |
+        // 6の共分散行列の更新では、stacked = Q * R となるので、Qは直交行列であることから左からQ.Tをかけることで、R を求めている
     }
 
 private:
