@@ -122,7 +122,7 @@ public:
             this->orientation_ = (this->orientation_ * delta_q).normalized();
         }
 
-        // update noise covariance
+        // 2. ノイズ共分散行列の更新
         {
             Eigen::Matrix<double, 12, 12> F = Eigen::Matrix<double, 12, 12>::Identity();
             // 誤差状態遷移行列 F の構築
@@ -144,7 +144,7 @@ public:
             stacked.topRows<12>() = this->L_ * F.transpose();
             stacked.bottomRows<6>() = this->SQ_ * G.transpose();
 
-            Eigen::HouseholderQR<Eigen::Matrix<double, 18, 12>> qr(stacked);
+            const Eigen::HouseholderQR<Eigen::Matrix<double, 18, 12>> qr(stacked);
             this->L_ = qr.matrixQR().topRows<12>().template triangularView<Eigen::Upper>();
         }
     }
@@ -162,47 +162,50 @@ public:
         }
 
         // 1. 観測残差の計算
-        const Eigen::Vector3d residual_position = position_meas - this->position_;
-        Eigen::Quaterniond delta_q = this->orientation_.conjugate() * q_meas;
-        delta_q.normalize();
-        const Eigen::Vector3d residual_theta = logSO3(delta_q);
-
         // 6次元の残差ベクトル
         Eigen::Matrix<double, 6, 1> residual;
-        residual.segment<3>(0) = residual_position;
-        residual.segment<3>(3) = residual_theta;
+        {
+            const Eigen::Vector3d residual_position = position_meas - this->position_;
+            const Eigen::Quaterniond delta_q = (this->orientation_.conjugate() * q_meas).normalized();
+            const Eigen::Vector3d residual_theta = logSO3(delta_q);
+
+            residual.segment<3>(0) = residual_position;
+            residual.segment<3>(3) = residual_theta;
+        }
 
         // 2. 観測行列 H の構築
         Eigen::Matrix<double, 6, 12> H = Eigen::Matrix<double, 6, 12>::Zero();
         H.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity();
         H.block<3, 3>(3, 6) = Eigen::Matrix3d::Identity();
 
-        Eigen::Matrix<double, 18, 18> stacked = Eigen::Matrix<double, 18, 18>::Zero();
-        stacked.topLeftCorner<6, 6>() = this->SR_;
-        stacked.topRightCorner<6, 12>() = H * this->L_;
-        stacked.bottomRightCorner<12, 12>() = this->L_;
+        const Eigen::Matrix<double, 12, 6> LHt = this->L_ * H.transpose();
+        Eigen::Matrix<double, 18, 6> stacked_measurement;
+        stacked_measurement.topRows<6>() = this->SR_;
+        stacked_measurement.bottomRows<12>() = LHt;
 
-        Eigen::HouseholderQR<Eigen::Matrix<double, 18, 18>> qr(stacked);
-        const Eigen::Matrix<double, 18, 18> qr_matrix = qr.matrixQR();
-        const Eigen::Matrix<double, 18, 18> Rfull = qr_matrix.template triangularView<Eigen::Upper>();
+        const Eigen::HouseholderQR<Eigen::Matrix<double, 18, 6>> qr(stacked_measurement);
+        const auto T = qr.matrixQR().topRows<6>().template triangularView<Eigen::Upper>();
+        const Eigen::Matrix<double, 6, 1> y = T.transpose().solve(residual);
+        const Eigen::Matrix<double, 6, 1> z = T.solve(y);
 
-        const Eigen::Matrix<double, 6, 12> R12 = Rfull.topRightCorner<6, 12>();
-        const Eigen::Matrix<double, 12, 12> R22 = Rfull.bottomRightCorner<12, 12>();
+        // 3. 誤差状態の補正量を計算
+        const Eigen::Matrix<double, 12, 1> delta_x = this->L_.transpose() * (LHt * z);
 
-        Eigen::Matrix<double, 12, 6> K = R22.transpose().template triangularView<Eigen::Lower>().solve(R12.transpose());
+        // 4. 公称状態の補正
+        {
+            this->position_ += delta_x.segment<3>(0);
+            this->velocity_body_ += delta_x.segment<3>(3);
+            const Eigen::Vector3d delta_theta = delta_x.segment<3>(6);
+            this->orientation_ = (this->orientation_ * expSO3(delta_theta)).normalized();
+            this->angular_velocity_body_ += delta_x.segment<3>(9);
+        }
 
-        // 4. 誤差状態の補正量を計算
-        Eigen::Matrix<double, 12, 1> delta_x = K * residual;
+        // 5. 共分散行列の更新
+        Eigen::Matrix<double, 18, 12> stacked_covariance = Eigen::Matrix<double, 18, 12>::Zero();
+        stacked_covariance.bottomRows<12>() = this->L_;
+        stacked_covariance = qr.householderQ().adjoint() * stacked_covariance;
 
-        // 5. 公称状態の補正 (Inject error state into nominal state)
-        this->position_ += delta_x.segment<3>(0);
-        this->velocity_body_ += delta_x.segment<3>(3);
-        const Eigen::Vector3d delta_theta = delta_x.segment<3>(6);
-        this->orientation_ = (this->orientation_ * expSO3(delta_theta)).normalized();
-        this->angular_velocity_body_ += delta_x.segment<3>(9);
-
-        // 6. 共分散行列の更新 (Joseph form)
-        this->L_ = R22;
+        this->L_ = stacked_covariance.bottomRows<12>().template triangularView<Eigen::Upper>();
     }
 
 private:
