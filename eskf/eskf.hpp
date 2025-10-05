@@ -179,7 +179,7 @@ public:
 
         Eigen::Matrix<double, 18, 18> stacked = Eigen::Matrix<double, 18, 18>::Zero();
         stacked.topLeftCorner<6, 6>() = this->SR_;
-        stacked.bottomLeftCorner<12, 6>() = H * this->L_;
+        stacked.topRightCorner<6, 12>() = H * this->L_;
         stacked.bottomRightCorner<12, 12>() = this->L_;
 
         Eigen::HouseholderQR<Eigen::Matrix<double, 18, 18>> qr(stacked);
