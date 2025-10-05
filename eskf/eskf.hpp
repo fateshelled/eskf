@@ -189,17 +189,17 @@ public:
         Eigen::Matrix<double, 6, 1> y = T.transpose().triangularView<Eigen::Lower>().solve(residual);
         Eigen::Matrix<double, 6, 1> z = T.triangularView<Eigen::Upper>().solve(y);
 
-        // 4. 誤差状態の補正量を計算
+        // 3. 誤差状態の補正量を計算
         Eigen::Matrix<double, 12, 1> delta_x = this->L_.transpose() * (LHt * z);
 
-        // 5. 公称状態の補正 (Inject error state into nominal state)
+        // 4. 公称状態の補正 (Inject error state into nominal state)
         this->position_ += delta_x.segment<3>(0);
         this->velocity_body_ += delta_x.segment<3>(3);
         const Eigen::Vector3d delta_theta = delta_x.segment<3>(6);
         this->orientation_ = (this->orientation_ * expSO3(delta_theta)).normalized();
         this->angular_velocity_body_ += delta_x.segment<3>(9);
 
-        // 6. 共分散行列の更新
+        // 5. 共分散行列の更新
         Eigen::Matrix<double, 18, 12> stacked_covariance = Eigen::Matrix<double, 18, 12>::Zero();
         stacked_covariance.bottomRows<12>() = this->L_;
         stacked_covariance = qr.householderQ().adjoint() * stacked_covariance;
