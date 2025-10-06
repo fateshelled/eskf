@@ -19,8 +19,6 @@ public:
           orientation_(Eigen::Quaterniond::Identity()),
           angular_velocity_body_(Eigen::Vector3d::Zero()),
           L_(Eigen::Matrix<double, 12, 12>::Identity()),
-          Q_(Eigen::Matrix<double, 6, 6>::Identity()),
-          R_(Eigen::Matrix<double, 6, 6>::Identity()),
           SQ_(Eigen::Matrix<double, 6, 6>::Identity()),
           SR_(Eigen::Matrix<double, 6, 6>::Identity())
     {
@@ -60,10 +58,11 @@ public:
     // プロセスノイズの密度を設定します。
     void setProcessNoiseDensities(double q_v, double q_omega)
     {
-        this->Q_.setZero();
-        this->Q_.block<3, 3>(0, 0) = q_v * Eigen::Matrix3d::Identity();
-        this->Q_.block<3, 3>(3, 3) = q_omega * Eigen::Matrix3d::Identity();
-        Eigen::LLT<Eigen::Matrix<double, 6, 6>> llt(this->Q_);
+        Eigen::Matrix<double, 6, 6> Q = Eigen::Matrix<double, 6, 6>::Zero();
+        Q.block<3, 3>(0, 0) = q_v * Eigen::Matrix3d::Identity();
+        Q.block<3, 3>(3, 3) = q_omega * Eigen::Matrix3d::Identity();
+
+        Eigen::LLT<Eigen::Matrix<double, 6, 6>> llt(Q);
         if (llt.info() == Eigen::Success)
         {
             this->SQ_ = llt.matrixU(); // upper triangle
@@ -77,10 +76,11 @@ public:
     // 観測ノイズの標準偏差を設定します。
     void setMeasurementNoise(double sigma_p, double sigma_theta)
     {
-        this->R_.setZero();
-        this->R_.block<3, 3>(0, 0) = (sigma_p * sigma_p) * Eigen::Matrix3d::Identity();
-        this->R_.block<3, 3>(3, 3) = (sigma_theta * sigma_theta) * Eigen::Matrix3d::Identity();
-        Eigen::LLT<Eigen::Matrix<double, 6, 6>> llt(this->R_);
+        Eigen::Matrix<double, 6, 6> R = Eigen::Matrix<double, 6, 6>::Zero();
+        R.block<3, 3>(0, 0) = (sigma_p * sigma_p) * Eigen::Matrix3d::Identity();
+        R.block<3, 3>(3, 3) = (sigma_theta * sigma_theta) * Eigen::Matrix3d::Identity();
+
+        Eigen::LLT<Eigen::Matrix<double, 6, 6>> llt(R);
         if (llt.info() == Eigen::Success)
         {
             this->SR_ = llt.matrixU(); // upper triangle
@@ -109,6 +109,8 @@ public:
     // @param dt 経過時間
     void predict(double dt)
     {
+        if (dt <= 0.0) return;
+
         const Eigen::Matrix3d R = this->orientation_.toRotationMatrix();
 
         // 1. 公称状態の予測
@@ -144,14 +146,13 @@ public:
             // ノイズ駆動行列 G の構築
             Eigen::Matrix<double, 12, 6> G = Eigen::Matrix<double, 12, 6>::Zero();
             {
-                //                        position             velocity        quaternion   angular_velocity
-                //         position |   0.5 * R * dt^2  |                    |            |                  |
-                //         velocity |       I * dt      |        Zero        |            |                  |
-                //       quaternion |                   |   0.5 * I * dt^2   |    Zero    |                  |
-                // angular_velocity |                   |       I * dt       |            |        Zero      |
+                //                        position         velocity    quaternion   angular_velocity
+                //         position |   0.5 * R * dt^2  |            |            |                  |
+                //         velocity |       I * dt      |    Zero    |            |                  |
+                //       quaternion |                   |            |    Zero    |                  |
+                // angular_velocity |                   |   I * dt   |            |        Zero      |
                 G.block<3, 3>(0, 0) = 0.5 * R * dt * dt;
                 G.block<3, 3>(3, 0) = Eigen::Matrix3d::Identity() * dt;
-                G.block<3, 3>(6, 3) = 0.5 * Eigen::Matrix3d::Identity() * dt * dt;
                 G.block<3, 3>(9, 3) = Eigen::Matrix3d::Identity() * dt;
             }
 
@@ -224,7 +225,7 @@ public:
             //    = | SR.T ; H * L.T| * |    SR   |
             //                          | L * H.T |
             //    = SR.T * SR + H * L.T * L * H.T
-            //    = H * P(prev) + H.T + R
+            //    = H * P(prev) * H.T + R
 
             stacked_measurement.block<6, 6>(0, 0) = this->SR_;
             stacked_measurement.block<12, 6>(6, 0) = LHt;
@@ -332,11 +333,9 @@ private:
     // --- 状態変数 ---
     Eigen::Vector3d position_;              // 位置 (ワールド座標系)
     Eigen::Vector3d velocity_body_;         // 速度 (機体座標系)
-    Eigen::Quaterniond orientation_;        // 姿勢 (ワールド座標系から機体座標系への回転)
+    Eigen::Quaterniond orientation_;        // 姿勢 (機体座標系からワールド座標系への回転)
     Eigen::Vector3d angular_velocity_body_; // 角速度 (機体座標系)
     Eigen::Matrix<double, 12, 12> L_;       // 誤差状態共分散の平方根（上三角）
-    Eigen::Matrix<double, 6, 6> Q_;         // プロセスノイズの共分散行列
-    Eigen::Matrix<double, 6, 6> R_;         // 観測ノイズの共分散行列
     Eigen::Matrix<double, 6, 6> SQ_;        // プロセスノイズ共分散の平方根（上三角）
     Eigen::Matrix<double, 6, 6> SR_;        // 観測ノイズ共分散の平方根（上三角）
 };
