@@ -133,54 +133,84 @@ public:
 
         // 2. ノイズ共分散行列の更新
         {
-            // 次の誤差状態 = F * 現在の誤差状態 + G * プロセスノイズ
+            //  次の誤差状態 = F * 現在の誤差状態 + G * プロセスノイズ
+
+            //  誤差状態方程式は次のように表される：
+            //      dδx/dt = F * δx + G * w
+            //  w はプロセスノイズベクトルであり、以下のように定義する
+            //      w = [ w_v, w_ω ]^T
+            //      w_v : 速度のランダムウォークを駆動するノイズ（擬似的な加速度ノイズ）
+            //      w_ω : 角速度のランダムウォークを駆動するノイズ（擬似的な角加速度ノイズ）
+
+            //  δxを t -> t + Δt の間で一次近似の積分をすると
+            //      δx(t + Δt) ≒ δx(t) + dδx(t)/dt * Δt
+            //  この式をESKFの文脈に書き換えると、
+            //  時刻 t + Δt の誤差状態は予測後の状態、δxの時間微分は誤差状態方程式となる
+            //      δx(pred) ≒ δx(current) + (F * δx + G * w) * Δt
+            //
+            //  モデル上の仮定：
+            //      ・速度 v は一定だが、ランダムウォークノイズ w_v によりゆらぐ
+            //      ・角速度 ω も一定だが、ランダムウォークノイズ w_ω によりゆらぐ
+            //
 
             // 誤差状態遷移行列 F の構築
             // （真値の運動方程式と公称状態の差を一次近似したヤコビアン）
             Eigen::Matrix<double, 12, 12> F = Eigen::Matrix<double, 12, 12>::Identity();
             {
                 // 1行目: 誤差モデル p = p^ + δp
-                //        運動方程式 p(pred) = p(current) + R * v * dt
+                //        運動方程式 真値 p(pred) = p(current) + R * v * dt + 1/2 * R * w_v * dt^2
+                //                   公称 p^(pred) = p^(current) + R^ * v^ * dt
                 //        真値と公称状態の運動方程式の差分をとると、
-                //        p(pred) - p^(pred) = p(current) - p^(current) + R * v * dt - R^ * v^ * dt
+                //        p(pred) - p^(pred) = p(current) - p^(current) + R * v * dt - R^ * v^ * dt + 1/2 * R * w_v * dt^2
                 //        ここで ^ は公称状態であるということ、真値と公称の差分をδ、歪対称行列を []x で表す
                 //        真値のRが未知だが、R ≒ R^ * (I + [δθ]x) と近似する
-                //        δp(pred) = δp(current) + R^ * (I + [δθ]x) * v * dt - R^ * v^ * dt
-                //                 = δp(current) + R^ * (v - v^) * dt + R^ * [δθ]x * v * dt
-                //                 = δp(current) + R^ * δv * dt + R^ * [δθ]x * v * dt
+                //        δp(pred) = δp(current) + R^ * (I + [δθ]x) * v * dt - R^ * v^ * dt + 1/2 * R^ * (I + [δθ]x) * w_v * dt^2
+                //                 = δp(current) + R^ * (v - v^) * dt + R^ * [δθ]x * v * dt + 1/2 * R^ * w_v * dt^2 + 1/2 * R^ * [δθ]x * w_v * dt^2
+                //                 = δp(current) + R^ * δv * dt + R^ * [δθ]x * v * dt + 1/2 * R^ * w_v * dt^2 + 1/2 * R^ * [δθ]x * w_v * dt^2
                 //        ここで、[δθ]x * v は δθとvのクロス積なので、[δθ]x * v = -[v]x * δθ
-                //        δp(pred) = δp(current) + R^ * δv * dt - R^ * [v]x * δθ * dt
+                //        また、[δθ]x * w_v は誤差とノイズの積なので [δθ]x * w_v ≒ 0 とすると、
+                //        δp(pred) = δp(current) + R^ * δv * dt - R^ * [v]x * δθ * dt + 1/2 * R^ * w_v * dt^2
                 //        δvが十分に小さいとすると、v = v^ + δv ≒ v^ なので
-                //        δp(pred) = δp(current) + R^ * δv * dt - R^ * [v^]x * δθ * dt
+                //        δp(pred) = δp(current) + R^ * δv * dt - R^ * [v^]x * δθ * dt + 1/2 * R^ * w_v * dt^2
                 //        したがって、
                 //        ∂δp(pred) / ∂δv = R^ * dt, ∂δp(pred) / ∂δθ = - R^ * [v^]x * dt
 
                 // 2行目: 誤差モデル v(pred) = v(current)^ + δv(current)
-                //        他の要素との関係がないので、
+                //        運動方程式 真値 v(pred) = v(current) + w_v * dt
+                //                   公称 v^(pred) = v^(current)
+                //        1行目と同様に
+                //        v(prec) - v^(pred) = v(current) - v^(current) + w_v * dt
+                //        δv(pred) = δv(current) + w_v * dt
+                //        したがって、
                 //        ∂δv(pred) / ∂δv(current) = I
 
-                // 3行目: モデル q(pred) = q(current) ⊗ exp(1/2 ω(current) * dt)     現在の真値姿勢に真値角速度の時間積分値を加えると次時刻の真値姿勢が得られる
-                //               q(pred)^ = q(current)^ ⊗ exp(1/2 ω(current)^ * dt)  現在の公称姿勢に公称角速度の時間積分値を加えると次時刻の公称姿勢が得られる
-                //        誤差モデル q(current) = q(current)^ ⊗ exp(1/2 δθ(current))     現在の公称姿勢に姿勢誤差を加えることで、現在の真値姿勢が得られる
-                //                   q(pred) = q(pred)^ ⊗ exp(1/2 δθ(pred))              次時刻の公称姿勢に姿勢誤差を加えることで、次時刻の真値姿勢が得られる
-                //       一番下の式に対して、左から (q(pred)^).inv をかけると
+                // 3行目: 誤差モデル q(pred) = q(pred)^ ⊗ exp(1/2 * δθ(pred))                                公称姿勢に姿勢誤差を加えることで、真値姿勢が得られる
+                //                   q(current) = q(current)^ ⊗ exp(1/2 * δθ(current))
+                //        運動方程式 q(pred) = q(current) ⊗ exp(1/2 * (ω(current) * dt + 1/2 * w_ω * dt^2))   現在姿勢に角速度の時間積分値を加えると次時刻の姿勢が得られる
+                //                   q(pred)^ = q(current)^ ⊗ exp(1/2 * ω(current)^ * dt)
+                //        誤差モデルに対して、左から (q(pred)^).inv をかけると
                 //        exp(1/2 δθ(pred)) = (q(pred)^).inv ⊗ q(pred)
-                //                          = (q(current)^ ⊗ exp(1/2 * ω(current)^ * dt)).inv ⊗ (q(current) ⊗ exp(1/2 ω(current) * dt))
+                //                          = (q(current)^ ⊗ exp(1/2 * ω(current)^ * dt)).inv ⊗ (q(current) ⊗ exp(1/2 * (ω(current) * dt + 1/2 * w_ω * dt^2)))
                 //        ω = ω^ + δωなので
-                //        exp(1/2 δθ(pred)) = (q(current)^ ⊗ exp(1/2 * ω(current)^ * dt)).inv ⊗ (q(current) ⊗ exp(1/2 (ω(current)^ + δω(current))* dt))
-                //        q(current)^ と q(current) を運動方程式を用いて置き換えて
-                //        exp(1/2 δθ(pred)) = (exp(-1/2 * ω(current)^ * dt) ⊗ (q(current)^).inv) ⊗ ((q(current)^ ⊗ exp(1/2 δθ(current))) ⊗ exp(1/2 (ω(current)^ + δω(current)) * dt))
-                //                          = exp(-1/2 * ω(current)^ * dt) ⊗ exp(1/2 δθ(current)) ⊗ exp(1/2 (ω(current)^ + δω(current)) * dt)
+                //        exp(1/2 δθ(pred)) = (q(current)^ ⊗ exp(1/2 * ω(current)^ * dt)).inv    ⊗ (q(current) ⊗ exp(1/2 * ((ω(current)^ + δω(current)) * dt  + 1/2 * w_ω * dt^2)))
+                //        exp(1/2 δθ(pred)) = (exp(-1/2 * ω(current)^ * dt) ⊗ (q(current)^).inv) ⊗ (q(current) ⊗ exp(1/2 * (ω(current)^ * dt + δω(current)* dt  + 1/2 * w_ω * dt^2)))
+                //        誤差モデルq(current)~を用いて q(current) と q(current)^ を置き換えて
+                //        exp(1/2 δθ(pred)) = (exp(-1/2 * ω(current)^ * dt) ⊗ (q(current)^).inv) ⊗ ((q(current)^ ⊗ exp(1/2 δθ(current))) ⊗ exp(1/2 * (ω(current)^ * dt + δω(current)* dt  + 1/2 * w_ω * dt^2)))
+                //                          =  exp(-1/2 * ω(current)^ * dt) ⊗ exp(1/2 * δθ(current)) ⊗ exp(1/2 * (ω(current)^ * dt + δω(current)* dt  + 1/2 * w_ω * dt^2)))
                 //        ここでexp(A) ⊗ exp(B) ≒ exp(A + B)という一次近似（BCH（Baker–Campbell–Hausdorff）展開）を用いて右辺をまとめると、
-                //        exp(1/2 δθ(pred)) = exp(1/2 * (δθ(current) + δω(current) * dt))
+                //        exp(1/2 δθ(pred)) = exp(1/2 * (δθ(current) + δω(current) * dt + 1/2 w_ω * dt^2))
                 //        expの中だけ抜き出して、
-                //        δθ(pred) = δθ(current) + δω(current) * dt
+                //        δθ(pred) = δθ(current) + δω(current) * dt + 1/2 * w_ω * dt^2
                 //        したがって
                 //        ∂δθ(pred) / ∂δθ(current) = I, ∂δθ(pred) / ∂δω(current) = I * dt
-                //        観測データはクオータニオン（4次元データ）として扱い、誤差状態は角度誤差（3次元データ）として扱う
 
                 // 4行目: 誤差モデル ω(pred) = ω(current)^ + δω(current)
-                //        他の要素との関係がないので、
+                //        運動方程式 真値 ω(pred) = ω(current) + w_ω * dt
+                //                   公称 ω^(pred) = ω^(current)
+                //        2行目と同様に
+                //        ω(prec) - ω^(pred) = ω(current) - ω^(current) + w_ω * dt
+                //        δω(pred) = δω(current) + w_ω * dt
+                //        したがって、
                 //        ∂δω(pred) / ∂δω(current) = I
 
                 //  pred \ current      δp         δv              δθ                 δω
@@ -197,13 +227,32 @@ public:
             // ノイズ駆動行列 G の構築
             Eigen::Matrix<double, 12, 6> G = Eigen::Matrix<double, 12, 6>::Zero();
             {
-                //                        position         velocity    quaternion   angular_velocity
-                //         position |   0.5 * R * dt^2  |            |            |                  |
-                //         velocity |       I * dt      |    Zero    |            |                  |
-                //       quaternion |                   |            |    Zero    |                  |
-                // angular_velocity |                   |   I * dt   |            |        Zero      |
+                //  1行目: 位置に関してF行列で導入した下記の式についてw_vとw_ωで微分すると
+                //         δp(pred) = δp(current) + R^ * δv(current) * dt - R^ * [v^]x * δθ(current) * dt + 1/2 * R^ * w_v * dt^2
+                //         ∂δp(pred) / ∂w_v = 1/2 * R^ * dt^2
+                //         ∂δp(pred) / ∂w_ω = 0
+                //
+                //  2行目: δv(pred) = δv(current) + w_v * dt
+                //         ∂δv(pred) / ∂w_v = I * dt
+                //         ∂δv(pred) / ∂w_ω = 0
+                //
+                //  3行目: δθ(pred) = δθ(current) + δω(current) * dt + 1/2 * w_ω * dt^2
+                //         ∂θ(pred) / ∂w_v = 0
+                //         ∂θ(pred) / ∂w_ω = 1/2 * I * dt^2
+                //
+                //  4行目: δω(pred) = δω(current) + w_ω * dt
+                //         ∂δω(pred) / ∂w_v = 0
+                //         ∂δω(pred) / ∂w_ω = I * dt
+                //
+                //                w_v                 w_ω
+                //    δp |   1/2 * R * dt^2  |                    |
+                //    δv |       I * dt      |                    |
+                //  　δθ |                   |   1/2 * I * dt^2   |
+                //    δω |                   |      I * dt        |
+
                 G.block<3, 3>(0, 0) = 0.5 * R * dt * dt;
                 G.block<3, 3>(3, 0) = Eigen::Matrix3d::Identity() * dt;
+                G.block<3, 3>(6, 3) = 0.5 * Eigen::Matrix3d::Identity() * dt * dt;
                 G.block<3, 3>(9, 3) = Eigen::Matrix3d::Identity() * dt;
             }
 
