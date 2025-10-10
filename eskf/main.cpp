@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "eskf.hpp"
+#include "sr_eskf.hpp"
 #include "trajectory_visualizer.hpp"
 
 namespace
