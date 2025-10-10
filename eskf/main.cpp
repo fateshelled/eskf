@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "sr_eskf.hpp"
+#include "eskf.hpp"
 #include "trajectory_visualizer.hpp"
 
 namespace
@@ -89,7 +90,8 @@ void generateSimulatedData(TrajectoryData &trajectory_data)
         trajectory_data.raw_trajectory.emplace_back(timestamps[i], noisy_pos, noisy_ori, false);
     }
 
-    ESKF eskf;
+    SR_ESKF eskf;
+    // ESKF eskf;
     Eigen::Vector3d initial_translation = Eigen::Vector3d::Zero();
     Eigen::Quaterniond initial_orientation = Eigen::Quaterniond::Identity();
 

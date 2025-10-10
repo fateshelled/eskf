@@ -8,12 +8,12 @@
 #include <Eigen/Geometry>
 #include <Eigen/QR>
 
-// Error-State Kalman Filter (ESKF) の実装。
+// Square-Root Error-State Kalman Filter (SR-ESKF) の実装。
 // 12次元の状態ベクトル（位置、速度、向き、角速度）を推定します。
-class ESKF
+class SR_ESKF
 {
 public:
-    ESKF()
+    SR_ESKF()
         : position_(Eigen::Vector3d::Zero()),
           velocity_body_(Eigen::Vector3d::Zero()),
           orientation_(Eigen::Quaterniond::Identity()),
@@ -69,8 +69,8 @@ public:
     void setMeasurementNoise(double sigma_p, double sigma_theta)
     {
         this->SR_.setZero();
-        this->SR_.block<3, 3>(0, 0) = std::abs(sigma_p) * Eigen::Matrix3d::Identity();
-        this->SR_.block<3, 3>(3, 3) = std::abs(sigma_theta) * Eigen::Matrix3d::Identity();
+        this->SR_.block<3, 3>(0, 0) = std::max(sigma_p, 0.0) * Eigen::Matrix3d::Identity();
+        this->SR_.block<3, 3>(3, 3) = std::max(sigma_theta, 0.0) * Eigen::Matrix3d::Identity();
     }
 
     // 現在の姿勢（位置と向き）をEigen::Isometry3dとして取得します。
