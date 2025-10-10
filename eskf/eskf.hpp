@@ -58,37 +58,21 @@ public:
     // プロセスノイズの密度を設定します。
     void setProcessNoiseDensities(double q_v, double q_omega)
     {
-        Eigen::Matrix<double, 6, 6> Q = Eigen::Matrix<double, 6, 6>::Zero();
-        Q.block<3, 3>(0, 0) = q_v * Eigen::Matrix3d::Identity();
-        Q.block<3, 3>(3, 3) = q_omega * Eigen::Matrix3d::Identity();
-
-        Eigen::LLT<Eigen::Matrix<double, 6, 6>> llt(Q);
-        if (llt.info() == Eigen::Success)
-        {
-            this->SQ_ = llt.matrixU(); // upper triangle
-        }
-        else
-        {
-            this->SQ_.setZero();
-        }
+        this->SQ_.setZero();
+        const double sigma_v = std::sqrt(std::max(q_v, 0.0));
+        const double sigma_omega = std::sqrt(std::max(q_omega, 0.0));
+        this->SQ_.block<3, 3>(0, 0) = sigma_v * Eigen::Matrix3d::Identity();
+        this->SQ_.block<3, 3>(3, 3) = sigma_omega * Eigen::Matrix3d::Identity();
     }
 
     // 観測ノイズの標準偏差を設定します。
     void setMeasurementNoise(double sigma_p, double sigma_theta)
     {
-        Eigen::Matrix<double, 6, 6> R = Eigen::Matrix<double, 6, 6>::Zero();
-        R.block<3, 3>(0, 0) = (sigma_p * sigma_p) * Eigen::Matrix3d::Identity();
-        R.block<3, 3>(3, 3) = (sigma_theta * sigma_theta) * Eigen::Matrix3d::Identity();
-
-        Eigen::LLT<Eigen::Matrix<double, 6, 6>> llt(R);
-        if (llt.info() == Eigen::Success)
-        {
-            this->SR_ = llt.matrixU(); // upper triangle
-        }
-        else
-        {
-            this->SR_.setZero();
-        }
+        this->SR_.setZero();
+        const double sigma_p_abs = std::abs(sigma_p);
+        const double sigma_theta_abs = std::abs(sigma_theta);
+        this->SR_.block<3, 3>(0, 0) = sigma_p_abs * Eigen::Matrix3d::Identity();
+        this->SR_.block<3, 3>(3, 3) = sigma_theta_abs * Eigen::Matrix3d::Identity();
     }
 
     // 現在の姿勢（位置と向き）をEigen::Isometry3dとして取得します。
