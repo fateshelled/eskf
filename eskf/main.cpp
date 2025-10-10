@@ -8,110 +8,113 @@
 #include <string>
 #include <vector>
 
+#include "sr_eskf.hpp"
 #include "eskf.hpp"
 #include "trajectory_visualizer.hpp"
 
 namespace
 {
-void printUsage(const char *program_name)
-{
-    std::cout << "Usage:\n";
-    std::cout << "  " << program_name << "            # Generate simulated data and visualize\n";
-    std::cout << "  " << program_name << " --load <raw.tum> <filtered.tum> <gt.tum>\n";
-    std::cout << "      Load trajectories from existing TUM files and visualize\n";
-}
-
-void generateSimulatedData(TrajectoryData &trajectory_data)
-{
-    trajectory_data.clear();
-
-    const int seed = 12345;
-    std::mt19937 gen(seed);
-
-    const double pos_noise_level = 0.2;
-    const double ori_noise_level = 0.05;
-    std::uniform_real_distribution<> distrib_pos(-pos_noise_level, pos_noise_level);
-    std::uniform_real_distribution<> distrib_ori(0.0, ori_noise_level);
-    std::uniform_real_distribution<> distrib_axis(-1.0, 1.0);
-
-    std::vector<Eigen::Vector3d> true_positions;
-    std::vector<Eigen::Quaterniond> true_orientations;
-    std::vector<double> timestamps;
-
-    const int num_steps = 100;
-    const double dt = 0.1;
-    true_positions.reserve(num_steps);
-    true_orientations.reserve(num_steps);
-    timestamps.reserve(num_steps);
-
-    for (int i = 0; i < num_steps; ++i)
+    void printUsage(const char *program_name)
     {
-        const double t = static_cast<double>(i) * 2.0 * M_PI / static_cast<double>(num_steps);
-
-        const Eigen::Vector3d true_pos(4.0 * std::sin(t), 0.5 * std::sin(2.0 * t), 2.0 * std::sin(2.0 * t));
-        Eigen::Vector3d direction;
-        if (i > 0)
-        {
-            direction = (true_pos - true_positions.back()).normalized();
-        }
-        else
-        {
-            direction = Eigen::Vector3d::UnitX();
-        }
-
-        Eigen::Quaterniond true_ori = Eigen::Quaterniond::FromTwoVectors(Eigen::Vector3d::UnitX(), direction);
-
-        true_positions.push_back(true_pos);
-        true_orientations.push_back(true_ori);
-        timestamps.push_back(static_cast<double>(i) * dt);
-
-        trajectory_data.ground_truth.emplace_back(timestamps.back(), true_pos, true_ori, false);
+        std::cout << "Usage:\n";
+        std::cout << "  " << program_name << "            # Generate simulated data and visualize\n";
+        std::cout << "  " << program_name << " --load <raw.tum> <filtered.tum> <gt.tum>\n";
+        std::cout << "      Load trajectories from existing TUM files and visualize\n";
     }
 
-    std::vector<Eigen::Vector3d> noisy_positions;
-    std::vector<Eigen::Quaterniond> noisy_orientations;
-    noisy_positions.reserve(num_steps);
-    noisy_orientations.reserve(num_steps);
-
-    for (int i = 0; i < num_steps; ++i)
+    void generateSimulatedData(TrajectoryData &trajectory_data)
     {
-        const Eigen::Vector3d noise_pos(distrib_pos(gen), distrib_pos(gen), distrib_pos(gen));
-        const Eigen::Vector3d noisy_pos = true_positions[i] + noise_pos;
+        trajectory_data.clear();
 
-        const Eigen::Vector3d noise_axis = Eigen::Vector3d(distrib_axis(gen), distrib_axis(gen), distrib_axis(gen)).normalized();
-        const double noise_angle = distrib_ori(gen);
-        const Eigen::Quaterniond noise_quat(Eigen::AngleAxisd(noise_angle, noise_axis));
-        const Eigen::Quaterniond noisy_ori = true_orientations[i] * noise_quat;
+        const int seed = 12345;
+        std::mt19937 gen(seed);
 
-        noisy_positions.push_back(noisy_pos);
-        noisy_orientations.push_back(noisy_ori);
+        const double pos_noise_level = 0.2;
+        const double ori_noise_level = 0.05;
+        std::uniform_real_distribution<> distrib_pos(-pos_noise_level, pos_noise_level);
+        std::uniform_real_distribution<> distrib_ori(0.0, ori_noise_level);
+        std::uniform_real_distribution<> distrib_axis(-1.0, 1.0);
 
-        trajectory_data.raw_trajectory.emplace_back(timestamps[i], noisy_pos, noisy_ori, false);
-    }
+        std::vector<Eigen::Vector3d> true_positions;
+        std::vector<Eigen::Quaterniond> true_orientations;
+        std::vector<double> timestamps;
 
-    ESKF eskf;
-    Eigen::Vector3d initial_translation = Eigen::Vector3d::Zero();
-    Eigen::Quaterniond initial_orientation = Eigen::Quaterniond::Identity();
+        const int num_steps = 100;
+        const double dt = 0.1;
+        true_positions.reserve(num_steps);
+        true_orientations.reserve(num_steps);
+        timestamps.reserve(num_steps);
 
-    eskf.setState(initial_translation, Eigen::Vector3d::Zero(), initial_orientation, Eigen::Vector3d::Zero());
-    eskf.setMeasurementNoise(0.1, 0.1);
-    eskf.setProcessNoiseDensities(5.0, 5.0);
+        for (int i = 0; i < num_steps; ++i)
+        {
+            const double t = static_cast<double>(i) * 2.0 * M_PI / static_cast<double>(num_steps);
 
-    for (int i = 0; i < num_steps; ++i)
-    {
-        if (i == 0) {
+            const Eigen::Vector3d true_pos(4.0 * std::sin(t), 0.5 * std::sin(2.0 * t), 2.0 * std::sin(2.0 * t));
+            Eigen::Vector3d direction;
+            if (i > 0)
+            {
+                direction = (true_pos - true_positions.back()).normalized();
+            }
+            else
+            {
+                direction = Eigen::Vector3d::UnitX();
+            }
+
+            Eigen::Quaterniond true_ori = Eigen::Quaterniond::FromTwoVectors(Eigen::Vector3d::UnitX(), direction);
+
+            true_positions.push_back(true_pos);
+            true_orientations.push_back(true_ori);
+            timestamps.push_back(static_cast<double>(i) * dt);
+
+            trajectory_data.ground_truth.emplace_back(timestamps.back(), true_pos, true_ori, false);
+        }
+
+        std::vector<Eigen::Vector3d> noisy_positions;
+        std::vector<Eigen::Quaterniond> noisy_orientations;
+        noisy_positions.reserve(num_steps);
+        noisy_orientations.reserve(num_steps);
+
+        for (int i = 0; i < num_steps; ++i)
+        {
+            const Eigen::Vector3d noise_pos(distrib_pos(gen), distrib_pos(gen), distrib_pos(gen));
+            const Eigen::Vector3d noisy_pos = true_positions[i] + noise_pos;
+
+            const Eigen::Vector3d noise_axis = Eigen::Vector3d(distrib_axis(gen), distrib_axis(gen), distrib_axis(gen)).normalized();
+            const double noise_angle = distrib_ori(gen);
+            const Eigen::Quaterniond noise_quat(Eigen::AngleAxisd(noise_angle, noise_axis));
+            const Eigen::Quaterniond noisy_ori = true_orientations[i] * noise_quat;
+
+            noisy_positions.push_back(noisy_pos);
+            noisy_orientations.push_back(noisy_ori);
+
+            trajectory_data.raw_trajectory.emplace_back(timestamps[i], noisy_pos, noisy_ori, false);
+        }
+
+        SR_ESKF eskf;
+        // ESKF eskf;
+        Eigen::Vector3d initial_translation = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond initial_orientation = Eigen::Quaterniond::Identity();
+
+        eskf.setState(initial_translation, Eigen::Vector3d::Zero(), initial_orientation, Eigen::Vector3d::Zero());
+        eskf.setMeasurementNoise(0.1, 0.1);
+        eskf.setProcessNoiseDensities(5.0, 5.0);
+
+        for (int i = 0; i < num_steps; ++i)
+        {
+            if (i == 0)
+            {
+                eskf.update(noisy_positions[i], noisy_orientations[i]);
+                continue;
+            }
+            const auto dt = timestamps[i] - timestamps[i - 1];
+            eskf.predict(dt);
             eskf.update(noisy_positions[i], noisy_orientations[i]);
-            continue;
-        }
-        const auto dt = timestamps[i] - timestamps[i - 1];
-        eskf.predict(dt);
-        eskf.update(noisy_positions[i], noisy_orientations[i]);
 
-        const Eigen::Isometry3d pose = eskf.getPose();
-        trajectory_data.filtered_trajectory.emplace_back(timestamps[i], pose.translation(),
-                                                         Eigen::Quaterniond(pose.linear()), true);
+            const Eigen::Isometry3d pose = eskf.getPose();
+            trajectory_data.filtered_trajectory.emplace_back(timestamps[i], pose.translation(),
+                                                             Eigen::Quaterniond(pose.linear()), true);
+        }
     }
-}
 } // namespace
 
 int main(int argc, char **argv)
@@ -172,12 +175,18 @@ int main(int argc, char **argv)
     TrajectoryVisualizer visualizer(&trajectory_data);
     TrajectoryVisualizer::setInstance(&visualizer);
 
-    glutDisplayFunc([]() { TrajectoryVisualizer::getInstance()->render(); });
-    glutKeyboardFunc([](unsigned char key, int x, int y) { TrajectoryVisualizer::getInstance()->handleKeyboard(key, x, y); });
-    glutSpecialFunc([](int key, int x, int y) { TrajectoryVisualizer::getInstance()->handleSpecialKeys(key, x, y); });
-    glutReshapeFunc([](int w, int h) { TrajectoryVisualizer::getInstance()->handleReshape(w, h); });
-    glutMouseFunc([](int button, int state, int x, int y) { TrajectoryVisualizer::getInstance()->handleMouse(button, state, x, y); });
-    glutMotionFunc([](int x, int y) { TrajectoryVisualizer::getInstance()->handleMouseMotion(x, y); });
+    glutDisplayFunc([]()
+                    { TrajectoryVisualizer::getInstance()->render(); });
+    glutKeyboardFunc([](unsigned char key, int x, int y)
+                     { TrajectoryVisualizer::getInstance()->handleKeyboard(key, x, y); });
+    glutSpecialFunc([](int key, int x, int y)
+                    { TrajectoryVisualizer::getInstance()->handleSpecialKeys(key, x, y); });
+    glutReshapeFunc([](int w, int h)
+                    { TrajectoryVisualizer::getInstance()->handleReshape(w, h); });
+    glutMouseFunc([](int button, int state, int x, int y)
+                  { TrajectoryVisualizer::getInstance()->handleMouse(button, state, x, y); });
+    glutMotionFunc([](int x, int y)
+                   { TrajectoryVisualizer::getInstance()->handleMouseMotion(x, y); });
 
     std::cout << "ESKF Trajectory Visualization Controls:\n";
     std::cout << "  r - Toggle raw trajectory\n";

@@ -47,8 +47,8 @@ public:
     void setProcessNoiseDensities(double q_v, double q_omega)
     {
         this->Q_.setZero();
-        this->Q_.block<3, 3>(0, 0) = q_v * Eigen::Matrix3d::Identity();
-        this->Q_.block<3, 3>(3, 3) = q_omega * Eigen::Matrix3d::Identity();
+        this->Q_.block<3, 3>(0, 0) = std::max(q_v, 0.0) * Eigen::Matrix3d::Identity();
+        this->Q_.block<3, 3>(3, 3) = std::max(q_omega, 0.0) * Eigen::Matrix3d::Identity();
     }
 
     // 観測ノイズの標準偏差を設定します。
@@ -77,6 +77,11 @@ public:
     // @param dt 経過時間
     void predict(double dt)
     {
+        if (dt <= 0.0)
+        {
+            return;
+        }
+
         const Eigen::Matrix3d R = this->orientation_.toRotationMatrix();
 
         // 1. 公称状態の予測
@@ -105,8 +110,7 @@ public:
             G.block<3, 3>(6, 3) = 0.5 * Eigen::Matrix3d::Identity() * dt * dt;
             G.block<3, 3>(9, 3) = Eigen::Matrix3d::Identity() * dt;
 
-            const Eigen::Matrix<double, 12, 12> FP = F * this->P_;
-            this->P_ = FP * F.transpose() + G * this->Q_ * G.transpose();
+            this->P_ = F * this->P_ * F.transpose() + G * this->Q_ * G.transpose();
             // 対称性を維持するための処理
             this->P_ = 0.5 * (P_ + this->P_.transpose());
         }
@@ -125,15 +129,16 @@ public:
         }
 
         // 1. 観測残差の計算
-        const Eigen::Vector3d residual_position = position_meas - this->position_;
-        Eigen::Quaterniond delta_q = this->orientation_.conjugate() * q_meas;
-        delta_q.normalize();
-        const Eigen::Vector3d residual_theta = logSO3(delta_q);
-
         // 6次元の残差ベクトル
         Eigen::Matrix<double, 6, 1> residual;
-        residual.segment<3>(0) = residual_position;
-        residual.segment<3>(3) = residual_theta;
+        {
+            const Eigen::Vector3d residual_position = position_meas - this->position_;
+            const Eigen::Quaterniond delta_q = (this->orientation_.conjugate() * q_meas).normalized();
+            const Eigen::Vector3d residual_theta = logSO3(delta_q);
+
+            residual.segment<3>(0) = residual_position;
+            residual.segment<3>(3) = residual_theta;
+        }
 
         // 2. 観測行列 H の構築
         Eigen::Matrix<double, 6, 12> H = Eigen::Matrix<double, 6, 12>::Zero();
@@ -148,12 +153,14 @@ public:
         // 4. 誤差状態の補正量を計算
         Eigen::Matrix<double, 12, 1> delta_x = K * residual;
 
-        // 5. 公称状態の補正 (Inject error state into nominal state)
-        this->position_ += delta_x.segment<3>(0);
-        this->velocity_body_ += delta_x.segment<3>(3);
-        const Eigen::Vector3d delta_theta = delta_x.segment<3>(6);
-        this->orientation_ = (this->orientation_ * expSO3(delta_theta)).normalized();
-        this->angular_velocity_body_ += delta_x.segment<3>(9);
+        // 5. 公称状態の補正
+        {
+            this->position_ += delta_x.segment<3>(0);
+            this->velocity_body_ += delta_x.segment<3>(3);
+            const Eigen::Vector3d delta_theta = delta_x.segment<3>(6);
+            this->orientation_ = (this->orientation_ * expSO3(delta_theta)).normalized();
+            this->angular_velocity_body_ += delta_x.segment<3>(9);
+        }
 
         // 6. 共分散行列の更新 (Joseph form)
         const Eigen::Matrix<double, 12, 12> IKH = Eigen::Matrix<double, 12, 12>::Identity() - K * H;
@@ -215,9 +222,9 @@ private:
     // --- 状態変数 ---
     Eigen::Vector3d position_;              // 位置 (ワールド座標系)
     Eigen::Vector3d velocity_body_;         // 速度 (機体座標系)
-    Eigen::Quaterniond orientation_;        // 姿勢 (ワールド座標系から機体座標系への回転)
+    Eigen::Quaterniond orientation_;        // 姿勢 (機体座標系からワールド座標系への回転)
     Eigen::Vector3d angular_velocity_body_; // 角速度 (機体座標系)
-    Eigen::Matrix<double, 12, 12> P_;       // 誤差状態の共分散行列
-    Eigen::Matrix<double, 6, 6> Q_;         // プロセスノイズの共分散行列
-    Eigen::Matrix<double, 6, 6> R_;         // 観測ノイズの共分散行列
+    Eigen::Matrix<double, 12, 12> P_;       // 誤差状態共分散行列
+    Eigen::Matrix<double, 6, 6> Q_;         // プロセスノイズ共分散行列
+    Eigen::Matrix<double, 6, 6> R_;         // 観測ノイズ共分散行列
 };
