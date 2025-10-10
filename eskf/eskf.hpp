@@ -69,10 +69,8 @@ public:
     void setMeasurementNoise(double sigma_p, double sigma_theta)
     {
         this->SR_.setZero();
-        const double sigma_p_abs = std::abs(sigma_p);
-        const double sigma_theta_abs = std::abs(sigma_theta);
-        this->SR_.block<3, 3>(0, 0) = sigma_p_abs * Eigen::Matrix3d::Identity();
-        this->SR_.block<3, 3>(3, 3) = sigma_theta_abs * Eigen::Matrix3d::Identity();
+        this->SR_.block<3, 3>(0, 0) = std::abs(sigma_p) * Eigen::Matrix3d::Identity();
+        this->SR_.block<3, 3>(3, 3) = std::abs(sigma_theta) * Eigen::Matrix3d::Identity();
     }
 
     // 現在の姿勢（位置と向き）をEigen::Isometry3dとして取得します。
