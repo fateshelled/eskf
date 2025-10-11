@@ -7,8 +7,9 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <algorithm>
 
-#include "sr_eskf.hpp"
+#include "imu_sr_eskf.hpp"
 #include "eskf.hpp"
 #include "trajectory_visualizer.hpp"
 
@@ -20,6 +21,25 @@ namespace
         std::cout << "  " << program_name << "            # Generate simulated data and visualize\n";
         std::cout << "  " << program_name << " --load <raw.tum> <filtered.tum> <gt.tum>\n";
         std::cout << "      Load trajectories from existing TUM files and visualize\n";
+    }
+
+    Eigen::Vector3d logSO3(const Eigen::Quaterniond &q)
+    {
+        Eigen::Quaterniond qn = q.normalized();
+        if (qn.w() < 0.0)
+        {
+            qn.coeffs() *= -1.0;
+        }
+        const double w = std::clamp(qn.w(), -1.0, 1.0);
+        const double angle = 2.0 * std::acos(w);
+        const double sin_half = std::sqrt(std::max(1.0 - w * w, 0.0));
+        if (sin_half < 1e-12)
+        {
+            return Eigen::Vector3d(qn.x(), qn.y(), qn.z()) * 2.0;
+        }
+        Eigen::Vector3d axis(qn.x(), qn.y(), qn.z());
+        axis /= sin_half;
+        return axis * angle;
     }
 
     void generateSimulatedData(TrajectoryData &trajectory_data)
@@ -36,12 +56,16 @@ namespace
         std::uniform_real_distribution<> distrib_axis(-1.0, 1.0);
 
         std::vector<Eigen::Vector3d> true_positions;
+        std::vector<Eigen::Vector3d> true_velocities;
+        std::vector<Eigen::Vector3d> true_accelerations;
         std::vector<Eigen::Quaterniond> true_orientations;
         std::vector<double> timestamps;
 
         const int num_steps = 100;
         const double dt = 0.1;
         true_positions.reserve(num_steps);
+        true_velocities.reserve(num_steps);
+        true_accelerations.reserve(num_steps);
         true_orientations.reserve(num_steps);
         timestamps.reserve(num_steps);
 
@@ -69,6 +93,19 @@ namespace
             trajectory_data.ground_truth.emplace_back(timestamps.back(), true_pos, true_ori, false);
         }
 
+        true_velocities.resize(num_steps, Eigen::Vector3d::Zero());
+        true_accelerations.resize(num_steps, Eigen::Vector3d::Zero());
+        for (int i = 1; i < num_steps; ++i)
+        {
+            const double dt_i = timestamps[i] - timestamps[i - 1];
+            true_velocities[i] = (true_positions[i] - true_positions[i - 1]) / dt_i;
+        }
+        for (int i = 1; i < num_steps; ++i)
+        {
+            const double dt_i = timestamps[i] - timestamps[i - 1];
+            true_accelerations[i] = (true_velocities[i] - true_velocities[i - 1]) / dt_i;
+        }
+
         std::vector<Eigen::Vector3d> noisy_positions;
         std::vector<Eigen::Quaterniond> noisy_orientations;
         noisy_positions.reserve(num_steps);
@@ -90,24 +127,47 @@ namespace
             trajectory_data.raw_trajectory.emplace_back(timestamps[i], noisy_pos, noisy_ori, false);
         }
 
-        SR_ESKF eskf;
-        // ESKF eskf;
-        Eigen::Vector3d initial_translation = Eigen::Vector3d::Zero();
-        Eigen::Quaterniond initial_orientation = Eigen::Quaterniond::Identity();
+        const Eigen::Vector3d gravity(0.0, 0.0, -9.81);
+        std::normal_distribution<double> gyro_noise(0.0, 0.002);
+        std::normal_distribution<double> accel_noise(0.0, 0.05);
 
-        eskf.setState(initial_translation, Eigen::Vector3d::Zero(), initial_orientation, Eigen::Vector3d::Zero());
-        eskf.setMeasurementNoise(0.1, 0.1);
-        eskf.setProcessNoiseDensities(5.0, 5.0);
+        std::vector<Eigen::Vector3d> gyro_measurements;
+        std::vector<Eigen::Vector3d> accel_measurements;
+        gyro_measurements.reserve(num_steps - 1);
+        accel_measurements.reserve(num_steps - 1);
+
+        for (int i = 1; i < num_steps; ++i)
+        {
+            const double dt_i = timestamps[i] - timestamps[i - 1];
+            const Eigen::Quaterniond dq = true_orientations[i - 1].conjugate() * true_orientations[i];
+            Eigen::Vector3d gyro = logSO3(dq) / dt_i;
+            Eigen::Vector3d acc_world = true_accelerations[i];
+            const Eigen::Matrix3d Rwb_prev = true_orientations[i - 1].toRotationMatrix();
+            Eigen::Vector3d specific_force = Rwb_prev.transpose() * (acc_world - gravity);
+
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                gyro(axis) += gyro_noise(gen);
+                specific_force(axis) += accel_noise(gen);
+            }
+
+            gyro_measurements.push_back(gyro);
+            accel_measurements.push_back(specific_force);
+        }
+
+        IMU_SR_ESKF eskf;
+        eskf.setState(noisy_positions.front(), true_velocities.front(), noisy_orientations.front(),
+                      Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
+        eskf.setMeasurementNoiseStandardDeviations(0.1, 0.1);
+        eskf.setProcessNoiseStandardDeviations(0.01, 0.1, 1e-4, 1e-4);
 
         for (int i = 0; i < num_steps; ++i)
         {
-            if (i == 0)
+            if (i > 0)
             {
-                eskf.update(noisy_positions[i], noisy_orientations[i]);
-                continue;
+                const double dt_i = timestamps[i] - timestamps[i - 1];
+                eskf.predict(dt_i, gyro_measurements[i - 1], accel_measurements[i - 1], gravity);
             }
-            const auto dt = timestamps[i] - timestamps[i - 1];
-            eskf.predict(dt);
             eskf.update(noisy_positions[i], noisy_orientations[i]);
 
             const Eigen::Isometry3d pose = eskf.getPose();
