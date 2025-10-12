@@ -120,8 +120,8 @@ public:
         F.block<3, 3>(6, 9) = -Eigen::Matrix3d::Identity() * dt;
 
         Eigen::Matrix<double, kStateDim, kNoiseDim> Gd = Eigen::Matrix<double, kStateDim, kNoiseDim>::Zero();
-        Gd.block<3, 3>(0, 3) = 0.5 * Rwb * dt * dt;
-        Gd.block<3, 3>(3, 3) = Rwb * dt;
+        Gd.block<3, 3>(0, 3) = -0.5 * Rwb * dt * dt;
+        Gd.block<3, 3>(3, 3) = -Rwb * dt;
         Gd.block<3, 3>(6, 0) = -Eigen::Matrix3d::Identity() * dt;
         Gd.block<3, 3>(9, 6) = Eigen::Matrix3d::Identity() * dt;
         Gd.block<3, 3>(12, 9) = Eigen::Matrix3d::Identity() * dt;
