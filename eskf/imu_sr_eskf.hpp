@@ -188,13 +188,13 @@ public:
             qn.coeffs() *= -1.0;
         }
         const double w = std::clamp(qn.w(), -1.0, 1.0);
-        const double angle = 2.0 * std::acos(w);
         const double sin_half = std::sqrt(std::max(1.0 - w * w, 0.0));
-        if (sin_half < 1e-12)
+        if (sin_half < 1e-8)
         {
-            return Eigen::Vector3d(qn.x(), qn.y(), qn.z()) * 2.0;
+            return 2.0 * qn.vec();
         }
-        const Eigen::Vector3d axis(qn.x(), qn.y(), qn.z()) / sin_half;
+        const double angle = 2.0 * std::atan2(sin_half, w);
+        const Eigen::Vector3d axis = qn.vec() / sin_half;
         return axis * angle;
     }
 
@@ -232,4 +232,3 @@ private:
     Eigen::Matrix<double, kNoiseDim, kNoiseDim> SQ_;
     Eigen::Matrix<double, kMeasDim, kMeasDim> SR_;
 };
-
