@@ -44,6 +44,7 @@ namespace
 
         const int num_steps = 100;
         const double dt = 0.1;
+        const double omega = (2.0 * M_PI / static_cast<double>(num_steps)) / dt;
         true_positions.reserve(num_steps);
         true_velocities.reserve(num_steps);
         true_accelerations.reserve(num_steps);
@@ -74,13 +75,21 @@ namespace
             trajectory_data.ground_truth.emplace_back(timestamps.back(), true_pos, true_ori, false);
         }
 
-        true_velocities.resize(num_steps, Eigen::Vector3d::Zero());
-        true_accelerations.resize(num_steps, Eigen::Vector3d::Zero());
-        for (int i = 1; i < num_steps; ++i)
+        true_velocities.resize(num_steps);
+        true_accelerations.resize(num_steps);
+        for (int i = 0; i < num_steps; ++i)
         {
-            const double dt_i = timestamps[i] - timestamps[i - 1];
-            true_velocities[i] = (true_positions[i] - true_positions[i - 1]) / dt_i;
-            true_accelerations[i] = (true_velocities[i] - true_velocities[i - 1]) / dt_i;
+            const double t_param = static_cast<double>(i) * 2.0 * M_PI / static_cast<double>(num_steps);
+
+            true_velocities[i] = Eigen::Vector3d(
+                4.0 * omega * std::cos(t_param),
+                omega * std::cos(2.0 * t_param),
+                4.0 * omega * std::cos(2.0 * t_param));
+
+            true_accelerations[i] = Eigen::Vector3d(
+                -4.0 * omega * omega * std::sin(t_param),
+                -2.0 * omega * omega * std::sin(2.0 * t_param),
+                -8.0 * omega * omega * std::sin(2.0 * t_param));
         }
 
         std::vector<Eigen::Vector3d> noisy_positions;
