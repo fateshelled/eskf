@@ -122,7 +122,7 @@ public:
         Eigen::Matrix<double, kStateDim, kNoiseDim> Gd = Eigen::Matrix<double, kStateDim, kNoiseDim>::Zero();
         Gd.block<3, 3>(0, 3) = 0.5 * Rwb * dt * dt;
         Gd.block<3, 3>(3, 3) = Rwb * dt;
-        Gd.block<3, 3>(6, 0) = Eigen::Matrix3d::Identity() * dt;
+        Gd.block<3, 3>(6, 0) = -Eigen::Matrix3d::Identity() * dt;
         Gd.block<3, 3>(9, 6) = Eigen::Matrix3d::Identity() * dt;
         Gd.block<3, 3>(12, 9) = Eigen::Matrix3d::Identity() * dt;
 
@@ -180,6 +180,24 @@ public:
         this->L_ = stacked_covariance.bottomRows<kStateDim>().template triangularView<Eigen::Upper>();
     }
 
+    static Eigen::Vector3d logSO3(const Eigen::Quaterniond &q)
+    {
+        Eigen::Quaterniond qn = q.normalized();
+        if (qn.w() < 0.0)
+        {
+            qn.coeffs() *= -1.0;
+        }
+        const double w = std::clamp(qn.w(), -1.0, 1.0);
+        const double angle = 2.0 * std::acos(w);
+        const double sin_half = std::sqrt(std::max(1.0 - w * w, 0.0));
+        if (sin_half < 1e-12)
+        {
+            return Eigen::Vector3d(qn.x(), qn.y(), qn.z()) * 2.0;
+        }
+        const Eigen::Vector3d axis(qn.x(), qn.y(), qn.z()) / sin_half;
+        return axis * angle;
+    }
+
 private:
     static Eigen::Matrix3d skew(const Eigen::Vector3d &v)
     {
@@ -202,24 +220,6 @@ private:
         return Eigen::Quaterniond(std::cos(half_angle), axis.x() * sin_half, axis.y() * sin_half,
                                   axis.z() * sin_half)
             .normalized();
-    }
-
-    static Eigen::Vector3d logSO3(const Eigen::Quaterniond &q)
-    {
-        Eigen::Quaterniond qn = q.normalized();
-        if (qn.w() < 0.0)
-        {
-            qn.coeffs() *= -1.0;
-        }
-        const double w = std::clamp(qn.w(), -1.0, 1.0);
-        const double angle = 2.0 * std::acos(w);
-        const double sin_half = std::sqrt(std::max(1.0 - w * w, 0.0));
-        if (sin_half < 1e-12)
-        {
-            return Eigen::Vector3d(qn.x(), qn.y(), qn.z()) * 2.0;
-        }
-        const Eigen::Vector3d axis(qn.x(), qn.y(), qn.z()) / sin_half;
-        return axis * angle;
     }
 
     Eigen::Vector3d position_;

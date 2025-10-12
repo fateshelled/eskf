@@ -23,25 +23,6 @@ namespace
         std::cout << "      Load trajectories from existing TUM files and visualize\n";
     }
 
-    Eigen::Vector3d logSO3(const Eigen::Quaterniond &q)
-    {
-        Eigen::Quaterniond qn = q.normalized();
-        if (qn.w() < 0.0)
-        {
-            qn.coeffs() *= -1.0;
-        }
-        const double w = std::clamp(qn.w(), -1.0, 1.0);
-        const double angle = 2.0 * std::acos(w);
-        const double sin_half = std::sqrt(std::max(1.0 - w * w, 0.0));
-        if (sin_half < 1e-12)
-        {
-            return Eigen::Vector3d(qn.x(), qn.y(), qn.z()) * 2.0;
-        }
-        Eigen::Vector3d axis(qn.x(), qn.y(), qn.z());
-        axis /= sin_half;
-        return axis * angle;
-    }
-
     void generateSimulatedData(TrajectoryData &trajectory_data)
     {
         trajectory_data.clear();
@@ -99,10 +80,6 @@ namespace
         {
             const double dt_i = timestamps[i] - timestamps[i - 1];
             true_velocities[i] = (true_positions[i] - true_positions[i - 1]) / dt_i;
-        }
-        for (int i = 1; i < num_steps; ++i)
-        {
-            const double dt_i = timestamps[i] - timestamps[i - 1];
             true_accelerations[i] = (true_velocities[i] - true_velocities[i - 1]) / dt_i;
         }
 
@@ -140,7 +117,7 @@ namespace
         {
             const double dt_i = timestamps[i] - timestamps[i - 1];
             const Eigen::Quaterniond dq = true_orientations[i - 1].conjugate() * true_orientations[i];
-            Eigen::Vector3d gyro = logSO3(dq) / dt_i;
+            Eigen::Vector3d gyro = IMU_SR_ESKF::logSO3(dq) / dt_i;
             Eigen::Vector3d acc_world = true_accelerations[i];
             const Eigen::Matrix3d Rwb_prev = true_orientations[i - 1].toRotationMatrix();
             Eigen::Vector3d specific_force = Rwb_prev.transpose() * (acc_world - gravity);

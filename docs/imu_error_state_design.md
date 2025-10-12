@@ -49,12 +49,12 @@ $$
 IMU 入力（角速度 $\tilde{\boldsymbol{\omega}}$、加速度 $\tilde{\mathbf{f}}$）を用いた誤差ダイナミクスは次のようにモデル化できます。
 
 - $\dot{\delta \mathbf{p}} = \delta \mathbf{v}$
-- $\dot{\delta \mathbf{v}} = -\mathbf{R}(\hat{\mathbf{q}})\,\mathrm{skew}(\tilde{\boldsymbol{\omega}}-\hat{\mathbf{b}}_g)\,\delta \mathbf{v} + \mathbf{R}(\hat{\mathbf{q}})\,\delta \mathbf{f} - \mathbf{R}(\hat{\mathbf{q}})\,\delta \mathbf{b}_a$
-- $\dot{\delta \boldsymbol{\theta}} = -\mathrm{skew}(\tilde{\boldsymbol{\omega}}-\hat{\mathbf{b}}_g)\,\delta \boldsymbol{\theta} - \delta \mathbf{b}_g + \mathbf{n}_g$
+- $\dot{\delta \mathbf{v}} = -\mathbf{R}(\hat{\mathbf{q}})\,[\tilde{\mathbf{f}}-\hat{\mathbf{b}}_a]_\times\,\delta \boldsymbol{\theta} - \mathbf{R}(\hat{\mathbf{q}})\,\delta \mathbf{b}_a + \mathbf{R}(\hat{\mathbf{q}})\,\mathbf{n}_a$
+- $\dot{\delta \boldsymbol{\theta}} = -\mathrm{skew}(\tilde{\boldsymbol{\omega}}-\hat{\mathbf{b}}_g)\,\delta \boldsymbol{\theta} - \delta \mathbf{b}_g - \mathbf{n}_g$
 - $\dot{\delta \mathbf{b}}_g = \mathbf{n}_{bg}$
 - $\dot{\delta \mathbf{b}}_a = \mathbf{n}_{ba}$
 
-ここで、$\delta \mathbf{f}$ は加速度ノイズ、$\mathbf{n}_g$ は角速度ノイズ、$\mathbf{n}_{bg}, \mathbf{n}_{ba}$ はそれぞれジャイロ・加速度バイアスのランダムウォークノイズです。$\mathbf{R}(\hat{\mathbf{q}})$ は公称姿勢から得られる回転行列、$\mathrm{skew}(\cdot)$ は歪対称行列演算子を表します。
+ここで、$\mathbf{n}_g$ は角速度ノイズ、$\mathbf{n}_a$ は加速度ノイズ、$\mathbf{n}_{bg}, \mathbf{n}_{ba}$ はそれぞれジャイロ・加速度バイアスのランダムウォークノイズです。$\mathbf{R}(\hat{\mathbf{q}})$ は公称姿勢から得られる回転行列、$[\cdot]_\times$ および $\mathrm{skew}(\cdot)$ は歪対称行列演算子を表します。
 
 ### プロセスノイズ
 プロセスノイズベクトルは
